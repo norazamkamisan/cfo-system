@@ -77,7 +77,7 @@ const MENU = [
     { label: 'Company', items: [['Business Profile', '#/control/profile'], ['Business Setting', '#/control/business'], ['Form Design', '#/control/form-design'], ['Form Settings', '#/control/form-settings']] },
     { label: 'Accounting', items: [['Balance Sheet Accounts', '#/control/accounts/bs'], ['Profit & Loss Accounts', '#/control/accounts/pl'], ['Opening Balance', '#/control/opening'], ['Budgets', '#/control/budgets'], ['Bank Reconciliation', '#/banking/reconcile']] },
     { label: 'Inventory', items: [['Unit of Measurement (UOM)', '#/control/uom'], ['Locations', '#/control/locations'], ['Inventory Settings', '#/control/inventory']] }, '-',
-    { label: 'Integrated Apps', href: '#/control/apps' }, { label: 'Backup & Data', href: '#/control/data' },
+    { label: 'Integrated Apps', href: '#/control/apps' }, { label: 'Sync (PC & phone)', href: '#/control/sync' }, { label: 'Backup & Data', href: '#/control/data' },
   ] },
   { label: 'A.I Scan', href: '#/ai-scan' },
 ];
@@ -420,4 +420,7 @@ window.addEventListener('DOMContentLoaded', () => {
   $('#menu-btn').onclick = e => { e.stopPropagation(); document.body.classList.toggle('nav-open'); };
   window.addEventListener('hashchange', render);
   render();
+  const si = $('#sync-ind');
+  si.onclick = () => { if (Sync.status === 'error') location.hash = '#/control/sync'; else Sync.run({ manual: true }); };
+  Sync.init();
 });

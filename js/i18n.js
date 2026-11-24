@@ -147,6 +147,7 @@ const DICT = {
   'Change Language': ['Tukar Bahasa', '更改语言', '更改語言'],
   'Logout': ['Log Keluar', '登出', '登出'],
   'Install app': ['Pasang aplikasi', '安装应用', '安裝應用'],
+  'Sync (PC & phone)': ['Segerak (PC & telefon)', '同步（电脑和手机）', '同步（電腦和手機）'],
   'Bank Accounts': ['Akaun Bank', '银行账户', '銀行賬戶'],
   'Employees': ['Pekerja', '员工', '員工'],
   'Inventory Adjustment': ['Pelarasan Inventori', '库存调整', '庫存調整'],

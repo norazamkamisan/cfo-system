@@ -258,6 +258,7 @@ const DB = {
     try { localStorage.setItem(this.key(), JSON.stringify(this.data)); }
     catch (e) { alert('Could not save data (storage may be full): ' + e.message); }
     Registry.rename(this.data.settings.company);
+    if (typeof Sync !== 'undefined') Sync.changed();
   },
   replace(d) { this.data = migrate(d); this.save(); },
   reset() { this.data = migrate(defaultData()); this.save(); },

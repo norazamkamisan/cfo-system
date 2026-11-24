@@ -1,11 +1,11 @@
 // CFO System service worker: keeps the app working offline.
 // Strategy: network first (so updates show up), falling back to the cached copy when offline.
-const CACHE = 'cfo-app-v1';
+const CACHE = 'cfo-app-v2';
 const FILES = [
   './', './index.html', './manifest.webmanifest', './css/style.css',
   './js/store.js', './js/i18n.js', './js/ui.js', './js/app.js', './js/docs.js', './js/banking.js',
   './js/inventory.js', './js/contacts.js', './js/reports.js', './js/control.js', './js/tax.js',
-  './js/aiscan.js', './js/sample.js', './js/pwa.js',
+  './js/aiscan.js', './js/sample.js', './js/pwa.js', './js/sync.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png',
 ];
 

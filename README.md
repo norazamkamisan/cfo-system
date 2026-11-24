@@ -9,9 +9,16 @@ A double-entry accounting system that runs in your browser, offline, with nothin
   - Once installed, it works offline.
 - **Offline on this PC:** double-click `Start CFO.cmd`, or run `node server.js` and open http://localhost:5173
 
-> Each device keeps its **own** data (nothing is uploaded). Move data between PC and phone with
-> **Control Panel → Backup & Data → Export / Import**. The local copy (localhost) and the online copy
-> (github.io) also keep separate data, even on the same PC — pick one and stick with it.
+## Sync between PC and phone
+**Control Panel → Sync (PC & phone)** keeps the same books on every device through a **private** GitHub
+repository (`cfo-data`), encrypted with your passphrase.
+1. Create a fine-grained GitHub token (repository: `cfo-data`, permission *Contents: Read and write*).
+2. On the PC: enter the repository, token and a passphrase → **Test & save** → **Upload this company**.
+3. On the phone: enter the same three → **Test & save** → **Link & download**.
+
+Each device still works offline; changes merge automatically after you save, when the app opens, and every
+2 minutes. If the same field is changed on both devices before they sync, the device that syncs last keeps
+its version and the clash is listed on the Sync page.
 
 ## Publishing updates
 After changing files: `git add -A`, `git commit -m "…"`, `git push`. GitHub Pages republishes in about a minute,
