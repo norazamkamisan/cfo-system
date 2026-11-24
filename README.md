@@ -3,8 +3,19 @@
 A double-entry accounting system that runs in your browser, offline, with nothing to install.
 
 ## How to open it
-- Double-click `index.html`, **or**
-- run `node server.js`, then open http://localhost:5173
+- **Online / install as an app:** https://norazamkamisan.github.io/cfo-system/
+  - **PC:** open the link in Edge or Chrome and click the **Install** icon in the address bar (or avatar menu → Install app).
+  - **Android:** Chrome → ⋮ → **Add to Home screen**. **iPhone:** Safari → Share → **Add to Home Screen**.
+  - Once installed, it works offline.
+- **Offline on this PC:** double-click `Start CFO.cmd`, or run `node server.js` and open http://localhost:5173
+
+> Each device keeps its **own** data (nothing is uploaded). Move data between PC and phone with
+> **Control Panel → Backup & Data → Export / Import**. The local copy (localhost) and the online copy
+> (github.io) also keep separate data, even on the same PC — pick one and stick with it.
+
+## Publishing updates
+After changing files: `git add -A`, `git commit -m "…"`, `git push`. GitHub Pages republishes in about a minute,
+and installed apps pick up the new version the next time they're opened online.
 
 ## Menu
 | Menu | What's inside |
