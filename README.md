@@ -10,11 +10,19 @@ A double-entry accounting system that runs in your browser, offline, with nothin
 - **Offline on this PC:** double-click `Start CFO.cmd`, or run `node server.js` and open http://localhost:5173
 
 ## Sync between PC and phone
-**Control Panel → Sync (PC & phone)** keeps the same books on every device through a **private** GitHub
-repository (`cfo-data`), encrypted with your passphrase.
-1. Create a fine-grained GitHub token (repository: `cfo-data`, permission *Contents: Read and write*).
-2. On the PC: enter the repository, token and a passphrase → **Test & save** → **Upload this company**.
-3. On the phone: enter the same three → **Test & save** → **Link & download**.
+**Control Panel → Sync (PC & phone)** keeps the same books on every device.
+
+**Google Drive (default):** data is saved in a **CFO System** folder in your Google Drive, encrypted with your
+passphrase, plus a daily backup in **CFO System › Backups** (last 30 kept). The app can only see files it created.
+1. One-time: create a Google OAuth Client ID (steps are on the Sync page) and put it in `js/config.js`
+   (`googleClientId`) or paste it on the Sync page.
+2. On the PC: passphrase → **Sign in with Google & save** → **Upload this company**.
+3. On the phone: same passphrase → **Sign in with Google & save** → **Link & download**.
+
+Google sign-in lasts about an hour; after that the sync icon turns orange — tap it once to continue.
+
+**GitHub (alternative):** a private repository (`cfo-data`) with a fine-grained token
+(*Contents: Read and write*). Choose the GitHub tab on the Sync page.
 
 Each device still works offline; changes merge automatically after you save, when the app opens, and every
 2 minutes. If the same field is changed on both devices before they sync, the device that syncs last keeps
