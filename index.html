@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CFO System</title>
+  <meta name="theme-color" content="#17324a">
+  <meta name="description" content="Accounting, sales, purchases, inventory and SST for your business.">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="CFO">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar no-print">
+    <button class="menu-btn" id="menu-btn" aria-label="Menu">☰</button>
+    <a class="brand" href="#/"><span class="logo">CFO</span><span class="brand-name">CFO System</span></a>
+    <button class="company-btn" id="company-name" title="Switch company"></button>
+    <div class="spacer"></div>
+    <input id="global-search" class="search" type="search" placeholder="Search…" aria-label="Search">
+    <div class="notif">
+      <button class="icon-btn" id="bell" aria-label="Notifications">🔔<span class="count" id="bell-count"></span></button>
+      <ul class="dropdown right" id="notif-list"></ul>
+    </div>
+    <div class="user-menu">
+      <button class="avatar" id="avatar" aria-label="User menu">A</button>
+      <ul class="dropdown right" id="user-menu-list"></ul>
+    </div>
+  </header>
+  <nav class="menubar-wrap no-print"><ul class="menubar" id="menubar"></ul></nav>
+  <main class="view" id="view"></main>
+  <div class="toasts" id="toasts"></div>
+
+  <script src="js/store.js"></script>
+  <script src="js/i18n.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/docs.js"></script>
+  <script src="js/banking.js"></script>
+  <script src="js/inventory.js"></script>
+  <script src="js/contacts.js"></script>
+  <script src="js/reports.js"></script>
+  <script src="js/control.js"></script>
+  <script src="js/tax.js"></script>
+  <script src="js/aiscan.js"></script>
+  <script src="js/sample.js"></script>
+  <script src="js/pwa.js"></script>
+</body>
+</html>

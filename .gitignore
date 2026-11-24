@@ -1,0 +1,5 @@
+# Local-only files (not part of the published app)
+.claude/
+Start CFO.cmd
+*.json.bak
+cfo-backup-*.json
