@@ -300,7 +300,7 @@ const GScript = {
       if (/accounts\.google\.com|ServiceLogin|Sign in/i.test(text)) throw new Error('The helper asks for sign-in — redeploy it with "Who has access: Anyone".');
       throw new Error(`The Google Drive helper did not answer properly (HTTP ${res.status}). Check the web app URL.`);
     }
-    if (j.error) throw new Error(/Not authorised/.test(j.error) ? 'The helper rejected the connection key — copy the helper code again from this page and redeploy, or paste the right connection code.' : 'Google Drive helper: ' + j.error);
+    if (j.error) throw new Error(/Not authorised/.test(j.error) ? 'The helper has a different secret key than this device. Fix: click "Copy helper code" on this page, replace all the code in the Apps Script editor and Save, then Deploy → Manage deployments → ✏ Edit → Version: New version → Deploy (the URL stays the same). Then click Connect again. On a phone, paste the connection code from your PC instead.' : 'Google Drive helper: ' + j.error);
     return j;
   },
   async check(cfg) { const j = await GScript.call(cfg, { action: 'ping' }); return { private: true, fullName: 'Google Drive › ' + j.folder, account: j.account }; },
@@ -603,7 +603,7 @@ route('/control/sync', (el, q) => {
   if (disc) disc.onclick = () => {
     if (!confirm('Disconnect this device from sync? Its data stays here; it just stops syncing.')) return;
     const cfg = Sync.cfg(); Object.keys(cfg.links || {}).forEach(k => { try { localStorage.removeItem(k + ':syncbase'); } catch (er) { /* ignore */ } });
-    GDrive.signOut(); localStorage.removeItem(SYNC_KEY); Sync.setStatus('off'); location.hash = '#/control/sync'; render();
+    GDrive.signOut(); const keep = cfg.scriptKey; localStorage.removeItem(SYNC_KEY); if (keep) Sync.setCfg({ scriptKey: keep }); Sync.setStatus('off'); location.hash = '#/control/sync'; render();
   };
   if (!connectedHere) return;
   const co = $('#co', el);
