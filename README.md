@@ -12,14 +12,17 @@ A double-entry accounting system that runs in your browser, offline, with nothin
 ## Sync between PC and phone
 **Control Panel → Sync (PC & phone)** keeps the same books on every device.
 
-**Google Drive (default):** data is saved in a **CFO System** folder in your Google Drive, encrypted with your
-passphrase, plus a daily backup in **CFO System › Backups** (last 30 kept). The app can only see files it created.
-1. One-time: create a Google OAuth Client ID (steps are on the Sync page) and put it in `js/config.js`
-   (`googleClientId`) or paste it on the Sync page.
-2. On the PC: passphrase → **Sign in with Google & save** → **Upload this company**.
-3. On the phone: same passphrase → **Sign in with Google & save** → **Link & download**.
+**Google Drive · automatic (recommended):** a small helper (, Google Apps Script) runs in your own
+Google account and saves the books to the **CFO System** folder in your Drive, encrypted with your passphrase, with a
+daily backup in **CFO System › Backups** (last 30 kept). No sign-in pop-ups — PC and phone sync in the background.
+1. On the PC Sync page: **Copy helper code** → script.google.com → New project → paste → **Deploy → Web app**
+   (Execute as: Me, Who has access: Anyone) → authorize → copy the Web app URL → paste it in the app → **Connect** →
+   **Upload this company**.
+2. Still on the PC: **Copy connection code for your phone** and send it to your phone.
+3. On the phone: paste the code, enter the same passphrase → **Connect** → **Link & download**.
 
-Google sign-in lasts about an hour; after that the sync icon turns orange — tap it once to continue.
+**Google Drive · sign-in:** direct Drive access with a Google Client ID (); needs one tap on the sync
+icon about once an hour.
 
 **GitHub (alternative):** a private repository (`cfo-data`) with a fine-grained token
 (*Contents: Read and write*). Choose the GitHub tab on the Sync page.

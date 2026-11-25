@@ -285,8 +285,51 @@ const GDrive = {
 };
 
 /** The storage this device uses. */
-const provOf = c => c.provider || (c.token && c.repo ? 'github' : 'gdrive');
-const Store = () => (provOf(Sync.cfg()) === 'github' ? GH : GDrive);
+/* ---------------- Google Drive via your own helper (automatic) ----------------
+   A small Google Apps Script web app in your account does the Drive work, so
+   the app never needs to sign in: fully automatic background sync. */
+const GScript = {
+  async call(cfg, body) {
+    let res;
+    try {
+      res = await fetch(cfg.scriptUrl, { method: 'POST', body: JSON.stringify(Object.assign({ key: cfg.scriptKey }, body)), redirect: 'follow', cache: 'no-store' });
+    } catch (e) { throw new Error('Could not reach your Google Drive helper — check the internet connection.'); }
+    const text = await res.text();
+    let j;
+    try { j = JSON.parse(text); } catch (e) {
+      if (/accounts\.google\.com|ServiceLogin|Sign in/i.test(text)) throw new Error('The helper asks for sign-in — redeploy it with "Who has access: Anyone".');
+      throw new Error(`The Google Drive helper did not answer properly (HTTP ${res.status}). Check the web app URL.`);
+    }
+    if (j.error) throw new Error(/Not authorised/.test(j.error) ? 'The helper rejected the connection key — copy the helper code again from this page and redeploy, or paste the right connection code.' : 'Google Drive helper: ' + j.error);
+    return j;
+  },
+  async check(cfg) { const j = await GScript.call(cfg, { action: 'ping' }); return { private: true, fullName: 'Google Drive › ' + j.folder, account: j.account }; },
+  async get(cfg, path) { const j = await GScript.call(cfg, { action: 'get', path }); return j.file || null; },
+  async put(cfg, path, text, sha, message, overwrite) {
+    const j = await GScript.call(cfg, { action: 'put', path, text, sha: sha || null, message: message || '', overwrite: !!overwrite });
+    if (j.conflict) { const e = new Error('conflict'); e.conflict = true; throw e; }
+    return j.sha;
+  },
+  async list(cfg, dir) { return (await GScript.call(cfg, { action: 'list', dir })).files || []; },
+  async remove(cfg, id) { await GScript.call(cfg, { action: 'remove', id }); },
+  newKey() { return Array.from(crypto.getRandomValues(new Uint8Array(24)), b => b.toString(16).padStart(2, '0')).join(''); },
+  validUrl: u => /^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(u),
+  /** One string for the phone: web app URL + key. */
+  code(cfg) { return 'CFO1-' + btoa(JSON.stringify({ u: cfg.scriptUrl, k: cfg.scriptKey })).replace(/=+$/, ''); },
+  parseCode(s) {
+    s = String(s || '').trim();
+    if (!s.startsWith('CFO1-')) return null;
+    try { const o = JSON.parse(atob(s.slice(5))); return o.u && o.k ? { scriptUrl: o.u, scriptKey: o.k } : null; } catch (e) { return null; }
+  },
+  async scriptText(key) {
+    const res = await fetch('helper/Code.gs', { cache: 'no-store' }).catch(() => null) || await caches.match('helper/Code.gs');
+    if (!res || !res.ok) throw new Error('Could not load the helper code — open this page while online.');
+    return (await res.text()).replace('__SYNC_KEY__', key);
+  },
+};
+
+const provOf = c => c.provider || (c.token && c.repo ? 'github' : c.scriptUrl ? 'gscript' : 'gdrive');
+const Store = () => ({ github: GH, gscript: GScript }[provOf(Sync.cfg())] || GDrive);
 
 /* ---------------- sync controller ---------------- */
 const Sync = {
@@ -297,7 +340,8 @@ const Sync = {
   setLink(l) { const c = Sync.cfg(); c.links = c.links || {}; if (l) c.links[DB.key()] = l; else delete c.links[DB.key()]; Sync.setCfg(c); },
   connected() {
     const c = Sync.cfg();
-    return provOf(c) === 'github' ? !!(c.token && c.repo) : !!(c.clientId && c.gconnected);
+    const p = provOf(c);
+    return p === 'github' ? !!(c.token && c.repo) : p === 'gscript' ? !!(c.scriptUrl && c.scriptKey) : !!(c.clientId && c.gconnected);
   },
   enabled() { return Sync.connected() && !!Sync.link(); },
   baseKey() { return DB.key() + ':syncbase'; },
@@ -386,16 +430,17 @@ const Sync = {
     }
   },
 
-  /** Google Drive only: one dated copy per day in "CFO System/Backups", keeping the latest 30. */
+  /** Google Drive: one dated copy per day in "CFO System/Backups", keeping the latest 30. */
   async dailyBackup(link, text) {
-    if (Store() !== GDrive) return;
+    const S = Store();
+    if (S === GH) return;
     const today = U.today();
     if (link.lastBackup === today) return;
     const cfg = Sync.cfg();
     const stem = link.path.split('/').pop().replace(/\.json$/, '');
-    await GDrive.put(cfg, `backups/${stem}-${today}.json`, text, null, 'Daily backup', true);
-    const mine = (await GDrive.list(cfg, 'backups')).filter(f => f.name.startsWith(stem + '-')).sort((a, b) => a.name.localeCompare(b.name));
-    for (const f of mine.slice(0, Math.max(0, mine.length - 30))) await GDrive.remove(cfg, f.id);
+    await S.put(cfg, `backups/${stem}-${today}.json`, text, null, 'Daily backup', true);
+    const mine = (await S.list(cfg, 'backups')).filter(f => f.name.startsWith(stem + '-')).sort((a, b) => a.name.localeCompare(b.name));
+    for (const f of mine.slice(0, Math.max(0, mine.length - 30))) await S.remove(cfg, f.id);
     link.lastBackup = today;
     Sync.setLink(link);
   },
@@ -446,54 +491,72 @@ const Sync = {
 };
 
 /* ---------------- Sync page ---------------- */
+const SYNC_MODES = [['gscript', 'Google Drive · automatic'], ['gdrive', 'Google Drive · sign-in'], ['github', 'GitHub']];
 route('/control/sync', (el, q) => {
   const c = Sync.cfg(), link = Sync.link();
-  const provider = q.via || provOf(c);
-  const origin = location.origin;
-  const clientId = c.clientId || (typeof CFO_CONFIG !== 'undefined' && CFO_CONFIG.googleClientId) || '';
+  const provider = q.via || (Sync.connected() ? provOf(c) : 'gscript');
   const connectedHere = Sync.connected() && provOf(c) === provider;
+  const clientId = c.clientId || (typeof CFO_CONFIG !== 'undefined' && CFO_CONFIG.googleClientId) || '';
+  if (provider === 'gscript' && !c.scriptKey && !connectedHere) { c.scriptKey = GScript.newKey(); Sync.setCfg(c); }
+  const pass = `${UI.field('Sync passphrase (same on every device)', `<input name="pass" type="password" autocomplete="new-password" value="${E(c.pass || '')}" placeholder="Recommended — encrypts your data">`, 'full')}
+    ${UI.field('This device\'s name', UI.input('device', c.device || Sync.device()))}`;
+  let form = '', help = '';
+  if (provider === 'gscript') {
+    form = `<p class="small muted">Fully automatic: a small helper in your own Google account saves your books to the <b>“CFO System”</b> folder in your Google Drive (daily backups in <b>CFO System › Backups</b>). No sign-in pop-ups, ever.</p>
+      <div class="form-grid mt">
+        ${UI.field('Helper web app URL — or the connection code from your other device', UI.input('script', connectedHere ? c.scriptUrl : '', 'placeholder="https://script.google.com/macros/s/…/exec   or   CFO1-…" autocapitalize="off" autocorrect="off"'), 'full')}
+        ${pass}
+      </div>`;
+    help = `<div class="card"><h2>First device: set up the helper (once)</h2>
+      <ol style="line-height:1.9">
+        <li><button type="button" class="btn sm primary" id="copyCode">Copy helper code</button> <span class="small muted">(it contains this device's secret key — keep it private)</span></li>
+        <li>Open <a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener">script.google.com → New project</a> with the Google account whose Drive you want to use. Click <b>Untitled project</b> at the top and name it <b>CFO Sync Helper</b>.</li>
+        <li>Select all the sample code in the editor, delete it, <b>paste</b> the copied code, and click the <b>💾 Save</b> icon.</li>
+        <li>Click <b>Deploy → New deployment</b> → the ⚙ gear next to “Select type” → <b>Web app</b>. Set <b>Execute as: Me</b> and <b>Who has access: Anyone</b>, then <b>Deploy</b>.</li>
+        <li>Click <b>Authorize access</b> → choose your account → <b>Advanced</b> → <b>Go to CFO Sync Helper (unsafe)</b> → <b>Allow</b>. (Google shows this warning for any script you write yourself.)</li>
+        <li>Copy the <b>Web app URL</b> (ends with <code>/exec</code>), paste it above, choose a passphrase, and click <b>Connect</b>.</li>
+      </ol>
+      <p class="small muted">“Anyone” only means the helper can be reached; it refuses every request that doesn't carry your secret key, and your data is also encrypted with your passphrase.</p>
+      <h2 class="mt">Other devices (phone)</h2>
+      <p>On the first device, after connecting, click <b>Copy connection code</b> (section 2) and send it to your phone (e.g. WhatsApp to yourself or email). On the phone, paste it in the box above, enter the <b>same passphrase</b> and click <b>Connect</b>.</p></div>`;
+  } else if (provider === 'gdrive') {
+    form = `<p class="small muted">Saves to the <b>“CFO System”</b> folder in your Google Drive. Google sign-in lasts about an hour; after that, tap the orange sync icon once.</p>
+      <div class="form-grid mt">${UI.field('Google Client ID', UI.input('clientId', clientId, 'placeholder="xxxxxxxx.apps.googleusercontent.com" autocapitalize="off" autocorrect="off"'), 'full')}${pass}</div>`;
+    help = `<div class="card"><h2>Google Client ID</h2><p class="muted">Created once in Google Cloud Console (APIs & Services → Google Auth Platform → Clients → Web application), with authorized JavaScript origin <code>${E(location.origin)}</code>.</p></div>`;
+  } else {
+    form = `<p class="small muted">Saves to a <b>private</b> GitHub repository.</p>
+      <div class="form-grid mt">
+        ${UI.field('Data repository (owner/name)', UI.input('repo', c.repo || '', 'placeholder="yourname/cfo-data" autocapitalize="off" autocorrect="off"'), 'full')}
+        ${UI.field('GitHub access token', `<input name="token" type="password" autocomplete="off" value="${E(c.token || '')}" placeholder="github_pat_…">`, 'full')}
+        ${pass}
+      </div>`;
+    help = `<div class="card"><h2>GitHub access token</h2><ol style="line-height:1.9">
+        <li>Open <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">GitHub → new fine-grained token</a>; name <b>CFO sync</b>, expiry up to 1 year.</li>
+        <li>Repository access: <b>Only select repositories</b> → your data repository.</li>
+        <li>Permissions → <b>Contents: Read and write</b> → <b>Generate token</b>, copy and paste above.</li></ol></div>`;
+  }
   el.innerHTML = `${UI.pageHead('Sync (PC & phone)', [['Control Panel', '#/control'], ['Sync']])}
     <div class="alert info">Sync keeps the same books on your PC and phone. Each device works offline; changes are merged automatically a few seconds after you save, when the app opens, and every 2 minutes while it's open.</div>
-    <div class="tabs"><a href="#/control/sync?via=gdrive" class="${provider === 'gdrive' ? 'active' : ''}">Google Drive</a><a href="#/control/sync?via=github" class="${provider === 'github' ? 'active' : ''}">GitHub</a></div>
+    <div class="tabs">${SYNC_MODES.map(([k, l]) => `<a href="#/control/sync?via=${k}" class="${provider === k ? 'active' : ''}">${E(l)}${k === 'gscript' ? ' ★' : ''}</a>`).join('')}</div>
     <div class="grid g2">
-      <form class="card" id="conn"><h2>1 · Connect this device</h2>
-        ${provider === 'gdrive' ? `
-        <p class="small muted">Your books are saved in a <b>“CFO System”</b> folder in your own Google Drive, with a dated backup every day (last 30 kept) in <b>CFO System › Backups</b>. The app can only see files it created — nothing else in your Drive.</p>
-        <div class="form-grid mt">
-          ${UI.field('Google Client ID', UI.input('clientId', clientId, 'placeholder="xxxxxxxx.apps.googleusercontent.com" autocapitalize="off" autocorrect="off"'), 'full')}
-        ` : `
-        <p class="small muted">Your books are saved in a <b>private</b> GitHub repository.</p>
-        <div class="form-grid mt">
-          ${UI.field('Data repository (owner/name)', UI.input('repo', c.repo || '', 'placeholder="yourname/cfo-data" autocapitalize="off" autocorrect="off"'), 'full')}
-          ${UI.field('GitHub access token', `<input name="token" type="password" autocomplete="off" value="${E(c.token || '')}" placeholder="github_pat_…">`, 'full')}
-        `}
-          ${UI.field('Sync passphrase (same on every device)', `<input name="pass" type="password" autocomplete="new-password" value="${E(c.pass || '')}" placeholder="Recommended — encrypts your data">`, 'full')}
-          ${UI.field('This device\'s name', UI.input('device', c.device || Sync.device()))}
-        </div>
+      <form class="card" id="conn"><h2>1 · Connect this device</h2>${form}
         <p class="small muted">These settings stay on this device only — never in backups or the synced data. If you forget the passphrase, the synced copy can't be opened (each device still has its own copy).</p>
-        <div class="btn-row mt"><button class="btn primary">${provider === 'gdrive' ? (connectedHere ? 'Save' : 'Sign in with Google & save') : 'Test & save'}</button>${Sync.connected() ? '<button type="button" class="btn danger" id="disc">Disconnect this device</button>' : ''}</div>
+        <div class="btn-row mt"><button class="btn primary">${connectedHere ? 'Save' : provider === 'gdrive' ? 'Sign in with Google & save' : 'Connect'}</button>${Sync.connected() ? '<button type="button" class="btn danger" id="disc">Disconnect this device</button>' : ''}</div>
       </form>
       <div class="card"><h2>2 · Sync this company</h2><div id="co" class="mt">${connectedHere ? '<p class="muted">Checking…</p>' : '<p class="muted">Connect this device first.</p>'}</div></div>
-    </div>
-    ${provider === 'gdrive' ? `<div class="card"><h2>One-time setup: register the app with Google</h2>
-      <p class="muted" style="margin-top:0">Google requires every app that saves to Drive to have its own ID. You do this once, then use the same Client ID on every device.</p>
-      <ol style="line-height:1.9">
-        <li>Open <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Google Cloud Console</a> with your Google account and create a project named <b>CFO System</b>.</li>
-        <li>Enable Drive: <a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" rel="noopener">Google Drive API</a> → <b>Enable</b>.</li>
-        <li><a href="https://console.cloud.google.com/auth/branding" target="_blank" rel="noopener">Google Auth Platform</a> → <b>Get started</b>: app name <b>CFO System</b>, your email, audience <b>External</b>, accept and <b>Create</b>.</li>
-        <li><b>Audience</b> → under Test users click <b>Add users</b> and add your own Gmail address (or click <b>Publish app</b>).</li>
-        <li><b>Clients</b> → <b>Create client</b> → type <b>Web application</b> → under <b>Authorized JavaScript origins</b> add<br><code>https://norazamkamisan.github.io</code><br><code>http://localhost:5173</code><br>→ <b>Create</b>.</li>
-        <li>Copy the <b>Client ID</b> (ends with <code>.apps.googleusercontent.com</code>) and paste it above.</li>
-      </ol>
-      <p class="small muted">This page is running at <code>${E(origin)}</code> — that address must be in the authorized origins list.</p></div>`
-    : `<div class="card"><h2>How to create the GitHub access token (once — use it on every device)</h2>
-      <ol style="line-height:1.9">
-        <li>Open <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">GitHub → new fine-grained token</a>.</li>
-        <li>Name: <b>CFO sync</b>. Expiration: up to 1 year.</li>
-        <li>Repository access: <b>Only select repositories</b> → your data repository (e.g. <b>cfo-data</b>).</li>
-        <li>Permissions → <b>Contents: Read and write</b>.</li>
-        <li><b>Generate token</b>, copy it and paste it above.</li>
-      </ol></div>`}`;
+    </div>${help}`;
+
+  const cc = $('#copyCode', el);
+  if (cc) cc.onclick = async () => {
+    try {
+      const code = await GScript.scriptText(Sync.cfg().scriptKey);
+      await navigator.clipboard.writeText(code);
+      UI.toast('Helper code copied — paste it into the Apps Script editor', 'ok');
+    } catch (err) {
+      try { const code = await GScript.scriptText(Sync.cfg().scriptKey); UI.modal('Helper code', `<p class="small muted">Copy all of this text:</p><textarea readonly style="width:100%;height:300px;font-family:monospace;font-size:12px">${E(code)}</textarea>`); }
+      catch (e2) { UI.toast(err.message, 'err'); }
+    }
+  };
   const conn = $('#conn', el);
   conn.onsubmit = async e => {
     e.preventDefault();
@@ -501,29 +564,37 @@ route('/control/sync', (el, q) => {
     const btn = $('button.primary', conn); const label = btn.textContent; btn.disabled = true; btn.textContent = 'Connecting…';
     const old = Sync.cfg();
     const switching = Sync.connected() && provOf(old) !== provider && Object.keys(old.links || {}).length;
-    if (switching && !confirm(`Switch this device from ${provOf(old) === 'github' ? 'GitHub' : 'Google Drive'} to ${provider === 'github' ? 'GitHub' : 'Google Drive'}? Companies will need to be uploaded or linked again.`)) { btn.disabled = false; btn.textContent = label; return; }
+    const name = k => (SYNC_MODES.find(m => m[0] === k) || [k, k])[1];
+    if (switching && !confirm(`Switch this device from ${name(provOf(old))} to ${name(provider)}? Companies will need to be uploaded or linked again.`)) { btn.disabled = false; btn.textContent = label; return; }
     try {
-      let next;
-      if (provider === 'gdrive') {
+      let next, info;
+      if (provider === 'gscript') {
+        const fromCode = GScript.parseCode(v.script);
+        const url = fromCode ? fromCode.scriptUrl : (v.script || '').trim();
+        const key = fromCode ? fromCode.scriptKey : old.scriptKey;
+        if (!GScript.validUrl(url)) throw new Error('Paste the Web app URL (https://script.google.com/macros/s/…/exec) or a connection code starting with CFO1-');
+        next = { provider, scriptUrl: url, scriptKey: key, pass: v.pass, device: v.device };
+        info = await GScript.check(next);
+      } else if (provider === 'gdrive') {
         const id = (v.clientId || '').trim();
         if (!/\.apps\.googleusercontent\.com$/.test(id)) throw new Error('The Client ID should end with .apps.googleusercontent.com');
         next = { provider, clientId: id, pass: v.pass, device: v.device };
         if (old.clientId !== id) { localStorage.removeItem('cfo-gtoken'); GDrive.folders = {}; }
         GDrive.interactive = true;
-        await GDrive.check(next);
+        info = await GDrive.check(next);
         next.gconnected = true;
       } else {
         const repo = (v.repo || '').replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '').replace(/\/$/, '');
         if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('Repository should look like owner/name');
         if (!v.token) throw new Error('Enter the access token');
-        const info = await GH.check({ repo, token: v.token });
+        info = await GH.check({ repo, token: v.token });
         if (!info.private && !confirm('This repository is PUBLIC — anyone could download your data file. Continue anyway?')) return;
         next = { provider, repo, token: v.token, pass: v.pass, device: v.device };
       }
       if (switching) { Object.keys(old.links).forEach(k => { try { localStorage.removeItem(k + ':syncbase'); } catch (er) { /* ignore */ } }); old.links = {}; }
-      if (old.pass && old.pass !== v.pass && Sync.link()) UI.toast('Passphrase changed — the next sync re-encrypts the shared copy. Use the same new passphrase on your other devices.');
+      if (old.pass && old.pass !== v.pass && Sync.link()) UI.toast('Passphrase changed — the next sync re-encrypts the synced copy. Use the same new passphrase on your other devices.');
       Sync.setCfg(Object.assign(old, next));
-      UI.toast(provider === 'gdrive' ? 'Connected to your Google Drive' : 'Connected to GitHub', 'ok');
+      UI.toast(`Connected to ${info.fullName}${info.account ? ' (' + info.account + ')' : ''}`, 'ok');
       location.hash = '#/control/sync'; render();
     } catch (err) { UI.toast(err.message, 'err'); }
     finally { GDrive.interactive = false; btn.disabled = false; btn.textContent = label; }
@@ -536,19 +607,21 @@ route('/control/sync', (el, q) => {
   };
   if (!connectedHere) return;
   const co = $('#co', el);
+  const phoneCode = provider === 'gscript' ? `<div class="mt"><button class="btn" id="pcode">Copy connection code for your phone</button></div>` : '';
   if (link) {
     co.innerHTML = `<table class="fin"><tbody>
         <tr><td>Company</td><td><b>${E(DB.data.settings.company)}</b></td></tr>
-        <tr><td>Saved in</td><td class="small">${E(Sync.where())} › ${E(provider === 'gdrive' ? 'CFO System/' + link.path.split('/').pop() : link.path)}</td></tr>
+        <tr><td>Saved in</td><td class="small">${E(Sync.where())} › ${E(provider === 'github' ? link.path : 'CFO System/' + link.path.split('/').pop())}</td></tr>
         <tr><td>Last synced</td><td>${link.lastSync ? U.fdatetime(link.lastSync) : '—'}</td></tr>
-        ${provider === 'gdrive' ? `<tr><td>Last daily backup</td><td>${link.lastBackup ? U.fdate(link.lastBackup) : '—'}</td></tr>` : ''}
+        ${provider !== 'github' ? `<tr><td>Last daily backup</td><td>${link.lastBackup ? U.fdate(link.lastBackup) : '—'}</td></tr>` : ''}
         <tr><td>Status</td><td>${Sync.status === 'error' ? `<span class="text-red">${E(Sync.lastError)}</span>` : E({ ok: 'Up to date', pending: 'Changes waiting', syncing: 'Syncing…', offline: 'Offline', auth: 'Sign-in needed — press Sync now' }[Sync.status] || '—')}</td></tr>
       </tbody></table>
       ${link.conflicts && link.conflicts.length ? `<div class="alert warn mt">Changed on both devices at the last sync (this device's version was kept):<br><span class="small">${link.conflicts.map(E).join('<br>')}</span></div>` : ''}
       ${link.duplicates && link.duplicates.length ? `<div class="alert err mt">Same document number created on two devices: <b>${link.duplicates.map(E).join(', ')}</b>. Open one and give it a new number.</div>` : ''}
-      <div class="btn-row mt"><button class="btn primary" id="now">Sync now</button><button class="btn danger" id="unl">Stop syncing this company</button></div>`;
+      <div class="btn-row mt"><button class="btn primary" id="now">Sync now</button><button class="btn danger" id="unl">Stop syncing this company</button></div>${phoneCode}`;
     $('#now', co).onclick = async () => { await Sync.run({ manual: true }); render(); };
     $('#unl', co).onclick = () => { if (confirm('Stop syncing this company on this device? The data stays here and in the synced copy.')) { Sync.unlink(); Sync.setStatus('off'); render(); } };
+    bindPhoneCode(co);
     return;
   }
   (async () => {
@@ -561,10 +634,10 @@ route('/control/sync', (el, q) => {
           ${UI.table([
             { label: 'Synced company', render: f => E(f.name.replace(/-[a-z0-9]{5}\.json$/, '').replace(/-/g, ' ')) + `<div class="small muted">${E(f.name)}</div>` },
             { label: '', cls: 'num', render: f => `<button class="btn sm" data-link="${E(f.path)}">Link & download</button>` },
-          ], files)}` : '<p class="muted small mt">No companies uploaded yet — start with "Upload" on the device that has your data.</p>'}`;
+          ], files)}` : '<p class="muted small mt">No companies uploaded yet — start with "Upload" on the device that has your data.</p>'}${phoneCode}`;
       $('#up', co).onclick = async () => {
         if (files.length && !confirm('Companies are already uploaded. Upload THIS company as a separate one? (To use an existing one, choose "Link & download" instead.)')) return;
-        try { await Sync.upload(); UI.toast(`Uploaded to ${Sync.where()} — this company now syncs`, 'ok'); Sync.init(); render(); } catch (err) { UI.toast(err.message, 'err'); }
+        try { await Sync.upload(); UI.toast(`Uploaded to ${Sync.where()} — this company now syncs automatically`, 'ok'); Sync.init(); render(); } catch (err) { UI.toast(err.message, 'err'); }
       };
       $$('[data-link]', co).forEach(b => b.onclick = async () => {
         if (!confirm(`Replace ALL data of "${DB.data.settings.company}" on this device with the synced copy? Export a backup first if this device has data you need.`)) return;
@@ -572,10 +645,20 @@ route('/control/sync', (el, q) => {
         try { await Sync.linkExisting(b.dataset.link); UI.toast('Linked — this device now has the synced books', 'ok'); Sync.init(); location.hash = '#/'; render(); }
         catch (err) { UI.toast(err.message, 'err'); b.disabled = false; }
       });
+      bindPhoneCode(co);
     } catch (err) {
       co.innerHTML = err.auth ? `<p class="muted">Sign in to Google Drive to see your synced companies.</p><button class="btn primary" id="si">Sign in with Google</button>` : `<div class="alert err">${E(err.message)}</div>`;
       const si = $('#si', co);
       if (si) si.onclick = async () => { try { await GDrive.signIn(Sync.cfg(), true); render(); } catch (e2) { UI.toast(e2.message, 'err'); } };
     }
   })();
+  function bindPhoneCode(root) {
+    const pc = $('#pcode', root);
+    if (!pc) return;
+    pc.onclick = async () => {
+      const code = GScript.code(Sync.cfg());
+      try { await navigator.clipboard.writeText(code); UI.toast('Connection code copied — send it to your phone and paste it on the Sync page there', 'ok'); }
+      catch (e) { UI.modal('Connection code for your phone', `<p class="small muted">Copy this and send it to your phone. Keep it private — it lets a device use your sync helper.</p><textarea readonly style="width:100%;height:110px;font-family:monospace;font-size:12px">${E(code)}</textarea>`); }
+    };
+  }
 });
