@@ -243,7 +243,18 @@ function companyModal() {
       $$('[data-sw]', m).forEach(b => b.onclick = () => { Registry.switchTo(b.dataset.sw); location.hash = '#/'; location.reload(); });
       $$('[data-rm]', m).forEach(b => b.onclick = () => {
         const c = r.list.find(x => x.id === b.dataset.rm);
-        if (prompt(`This permanently deletes ALL data of "${c.name}". Type DELETE to confirm.`) === 'DELETE') { Registry.remove(c.id); UI.toast('Company deleted'); m.remove(); companyModal(); }
+        m.remove();
+        UI.modal('Delete company', `
+          <div class="alert err">This permanently deletes <b>all data of “${E(c.name)}”</b> on this device — invoices, contacts, products, settings. It cannot be undone. (Copies already synced to Google Drive are not touched.)</div>
+          ${UI.field('Type DELETE to confirm', UI.input('confirm', '', 'autocomplete="off" autocapitalize="characters" placeholder="DELETE"'))}`, {
+          submitLabel: 'Delete company',
+          onSubmit(v) {
+            if (v.confirm !== 'DELETE') throw new Error('Type DELETE in capital letters to confirm');
+            Registry.remove(c.id);
+            UI.toast(`“${c.name}” deleted`, 'ok');
+            setTimeout(companyModal, 0);
+          },
+        });
       });
     },
     onSubmit(v) {

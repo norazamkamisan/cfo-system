@@ -233,7 +233,12 @@ const Registry = {
   remove(id) {
     const r = this.get(); const c = r.list.find(x => x.id === id);
     if (!c || r.list.length < 2) return;
-    try { localStorage.removeItem(c.key); } catch (e) { /* ignore */ }
+    try {
+      localStorage.removeItem(c.key);
+      localStorage.removeItem(c.key + ':syncbase');            // this company's last-synced copy
+      const s = JSON.parse(localStorage.getItem('cfo-sync') || 'null');
+      if (s && s.links && s.links[c.key]) { delete s.links[c.key]; localStorage.setItem('cfo-sync', JSON.stringify(s)); }
+    } catch (e) { /* ignore */ }
     r.list = r.list.filter(x => x.id !== id);
     if (r.current === id) r.current = r.list[0].id;
     this.set(r);
