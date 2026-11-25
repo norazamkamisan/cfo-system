@@ -12,7 +12,7 @@ A double-entry accounting system that runs in your browser, offline, with nothin
 ## Sync between PC and phone
 **Control Panel → Sync (PC & phone)** keeps the same books on every device.
 
-**Google Drive · automatic (recommended):** a small helper (, Google Apps Script) runs in your own
+**Google Drive · automatic (recommended):** a small helper (`helper/Code.gs`, Google Apps Script) runs in your own
 Google account and saves the books to the **CFO System** folder in your Drive, encrypted with your passphrase, with a
 daily backup in **CFO System › Backups** (last 30 kept). No sign-in pop-ups — PC and phone sync in the background.
 1. On the PC Sync page: **Copy helper code** → script.google.com → New project → paste → **Deploy → Web app**
@@ -21,7 +21,7 @@ daily backup in **CFO System › Backups** (last 30 kept). No sign-in pop-ups �
 2. Still on the PC: **Copy connection code for your phone** and send it to your phone.
 3. On the phone: paste the code, enter the same passphrase → **Connect** → **Link & download**.
 
-**Google Drive · sign-in:** direct Drive access with a Google Client ID (); needs one tap on the sync
+**Google Drive · sign-in:** direct Drive access with a Google Client ID (`js/config.js`); needs one tap on the sync
 icon about once an hour.
 
 **GitHub (alternative):** a private repository (`cfo-data`) with a fine-grained token
