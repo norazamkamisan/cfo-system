@@ -75,7 +75,7 @@ const UI = {
   },
   select(name, options, value = '', attrs = '') { return `<select ${name ? `name="${name}"` : ''} ${attrs}>${UI.opts(options, value)}</select>`; },
   contactOptions(type, blank = 'Select…') {
-    return [['', blank], ...DB.data.contacts.filter(c => !type || c.type === type || c.type === 'both')
+    return [['', blank], ...DB.data.contacts.filter(c => !type || c.type === type || c.type === 'both' || (type === 'supplier' && c.type === 'employee'))
       .sort((a, b) => a.name.localeCompare(b.name)).map(c => [c.id, c.name])];
   },
   accountOptions(blank) {

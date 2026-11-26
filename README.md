@@ -40,6 +40,10 @@ On approval you choose how it's posted:
 - **Paid by the company:** creates a Withdrawal from the chosen bank or cash account.
 - **Supplier bill:** not paid yet. Creates a Bill owed to the merchant.
 
+**Staff claims:** add staff in **Contacts → Employees List** (or a contact with type *Employee / Staff*). They are listed first under
+*Claimant*, and a receipt whose file name starts with a staff member's name (e.g. `Radzmin Syah Mara Training RM100.pdf`) is
+assigned to them automatically. Their Bills show under **Contacts → Staff** and in the Supplier Ledger / Aged Payables.
+
 Receipts move in Drive from the inbox to **Scanned**, then to **Approved** or **Rejected**. Claims sync to every device
 like the rest of the books. Requires the *Google Drive · automatic* helper, version 2 (update it from the Sync page).
 

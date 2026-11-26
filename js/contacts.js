@@ -8,7 +8,7 @@ function contactModal(c, onSaved) {
   const multiCur = DB.data.currencies.length > 1;
   UI.modal(c.id ? 'Edit Contact' : `New ${c.entity === 'individual' ? 'Individual' : 'Business'} Contact`, `<div class="form-grid">
     ${UI.field('Name *', UI.input('name', c.name), 'full')}
-    ${UI.field('Contact type', UI.select('type', [['customer', 'Customer'], ['supplier', 'Supplier'], ['both', 'Customer & Supplier']], c.type))}
+    ${UI.field('Contact type', UI.select('type', [['customer', 'Customer'], ['supplier', 'Supplier'], ['both', 'Customer & Supplier'], ['employee', 'Employee / Staff']], c.type))}
     ${UI.field('Entity', UI.select('entity', [['business', 'Business'], ['individual', 'Individual']], c.entity || 'business'))}
     <div class="field"><label class="lbl-reg">${c.entity === 'individual' ? 'IC / Passport No.' : 'Business Reg. No. (BRN)'}</label>${UI.input('regNo', c.regNo)}</div>
     ${UI.field('TIN (Tax Identification No.)', UI.input('tin', c.tin))}
@@ -34,15 +34,15 @@ function contactModal(c, onSaved) {
 
 route('/contacts', (el, q) => {
   const tab = q.tab || 'all';
-  const list = DB.data.contacts.filter(c => tab === 'all' || c.type === tab || c.type === 'both' || (tab === 'individual' && c.entity === 'individual')).filter(c => tab !== 'individual' || c.entity === 'individual').sort((a, b) => a.name.localeCompare(b.name));
+  const list = DB.data.contacts.filter(c => tab === 'all' || c.type === tab || (c.type === 'both' && tab !== 'employee') || (tab === 'individual' && c.entity === 'individual')).filter(c => tab !== 'individual' || c.entity === 'individual').sort((a, b) => a.name.localeCompare(b.name));
   el.innerHTML = `${UI.pageHead('Contacts List', null, `<a class="btn" href="#/contacts/sync">${E(t('Sync Contact Details'))}</a><a class="btn" href="#/contacts/request">${E(t('Request Contact Details'))}</a><button class="btn" data-new="individual">+ ${E(t('Individual'))}</button><button class="btn primary" data-new="business">+ ${E(t('Business'))}</button>`)}
-    <div class="tabs">${[['all', 'All'], ['customer', 'Customers'], ['supplier', 'Suppliers'], ['individual', 'Individual']].map(([k, l]) => `<a href="#/contacts?tab=${k}" class="${tab === k ? 'active' : ''}">${E(t(l))}</a>`).join('')}</div>
+    <div class="tabs">${[['all', 'All'], ['customer', 'Customers'], ['supplier', 'Suppliers'], ['employee', 'Staff'], ['individual', 'Individual']].map(([k, l]) => `<a href="#/contacts?tab=${k}" class="${tab === k ? 'active' : ''}">${E(t(l))}</a>`).join('')}</div>
     <div class="card"><div class="filters">${UI.searchBox()}</div>${UI.table([
       { label: 'Name', render: c => `<a href="#/contacts/${c.id}"><b>${E(c.name)}</b></a>${c.person ? `<div class="small muted">${E(c.person)}</div>` : ''}` },
       { label: 'Type', render: c => E({ customer: 'Customer', supplier: 'Supplier', both: 'Customer & Supplier' }[c.type]) + `<div class="small muted">${c.entity === 'individual' ? 'Individual' : 'Business'}</div>` },
       { label: 'Email', render: c => E(c.email) },
       { label: 'Phone', render: c => E(c.phone) },
-      { label: 'Receivables', cls: 'num', render: c => c.type !== 'supplier' ? U.amt(C.contactBalance(c.id, 'sales')) : '' },
+      { label: 'Receivables', cls: 'num', render: c => c.type !== 'supplier' && c.type !== 'employee' ? U.amt(C.contactBalance(c.id, 'sales')) : '' },
       { label: 'Payables', cls: 'num', render: c => c.type !== 'customer' ? U.amt(C.contactBalance(c.id, 'purchases')) : '' },
       { label: '', cls: 'num no-print', render: c => `<button class="btn sm" data-edit="${c.id}">${E(t('Edit'))}</button> <button class="btn sm danger" data-del="${c.id}">${E(t('Delete'))}</button>` },
     ], list, { href: c => '#/contacts/' + c.id, empty: 'No contacts yet.' })}</div>`;
@@ -101,7 +101,7 @@ route('/contacts/sync', (el) => {
       rows.forEach(r => {
         const o = {}; head.forEach((h, i) => { if (cols.includes(h)) o[h] = (r[i] || '').trim(); });
         if (!o.name) return;
-        if (o.type && !['customer', 'supplier', 'both'].includes(o.type)) o.type = 'customer';
+        if (o.type && !['customer', 'supplier', 'both', 'employee'].includes(o.type)) o.type = 'customer';
         if (o.entity && !['business', 'individual'].includes(o.entity)) o.entity = 'business';
         if (o.terms !== undefined) o.terms = o.terms === '' ? '' : U.num(o.terms);
         const ex = DB.data.contacts.find(c => c.name.toLowerCase() === o.name.toLowerCase());
@@ -119,7 +119,7 @@ route('/contacts/:id', (el, q, id) => {
   if (!c) throw new Error('Contact not found');
   const docs = DB.data.docs.filter(d => d.contactId === id).sort((a, b) => (b.date + b.number).localeCompare(a.date + a.number));
   const pays = DB.data.payments.filter(p => p.contactId === id).sort((a, b) => b.date.localeCompare(a.date));
-  const isC = c.type !== 'supplier', isS = c.type !== 'customer';
+  const isC = c.type !== 'supplier' && c.type !== 'employee', isS = c.type !== 'customer';
   el.innerHTML = `${UI.pageHead(c.name, [['Contacts', '#/contacts']], `<button class="btn" id="edit">${E(t('Edit'))}</button>${isC ? `<a class="btn" href="#/reports/ledger/customer?contact=${id}">${E(t('Customer Ledger'))}</a><a class="btn primary" href="#/docs/invoice/new?contact=${id}">+ ${E(t('Invoice'))}</a>` : ''}${isS ? `<a class="btn" href="#/reports/ledger/supplier?contact=${id}">${E(t('Supplier Ledger'))}</a><a class="btn" href="#/docs/bill/new?contact=${id}">+ ${E(t('Bill'))}</a>` : ''}`)}
     <div class="kpis">
       ${isC ? `<div class="kpi"><div class="lbl">${E(t('Receivables'))}</div><div class="val">${U.money(C.contactBalance(id, 'sales'))}</div></div>` : ''}
@@ -134,6 +134,22 @@ route('/contacts/:id', (el, q, id) => {
 });
 
 /* ---------------- Employees ---------------- */
+/** The contact used for an employee's expense claims (created on first use, kept in step with the employee record). */
+function staffContact(emp) {
+  let c = emp.contactId && DB.get('contacts', emp.contactId);
+  if (!c) c = DB.data.contacts.find(x => x.name.trim().toLowerCase() === emp.name.trim().toLowerCase());
+  const fields = { name: emp.name, email: emp.email || '', phone: emp.phone || '', regNo: emp.idNo || '', address: emp.address || '' };
+  if (c) {
+    const next = Object.assign({}, c, { name: emp.name });
+    ['email', 'phone', 'regNo', 'address'].forEach(k => { if (!next[k] && fields[k]) next[k] = fields[k]; });
+    if (next.type === 'customer') next.type = 'both';
+    if (JSON.stringify(next) !== JSON.stringify(c)) DB.upsert('contacts', next, 'Contact');
+  } else {
+    c = DB.upsert('contacts', Object.assign({ type: 'employee', entity: 'individual', terms: 0, notes: 'Staff — expense claims' }, fields), 'Contact');
+  }
+  if (emp.contactId !== c.id) { emp.contactId = c.id; DB.upsert('employees', emp, 'Employee'); }
+  return c;
+}
 function employeeModal(emp) {
   emp = emp || { status: 'active', startDate: U.today() };
   UI.modal(emp.id ? 'Edit Employee' : 'New Employee', `<div class="form-grid">
@@ -156,6 +172,7 @@ function employeeModal(emp) {
     onSubmit(v) {
       if (!v.name) throw new Error('Name is required');
       DB.upsert('employees', Object.assign(emp, v, { salary: U.num(v.salary) }), 'Employee');
+      staffContact(emp);
       UI.toast('Employee saved', 'ok'); render();
     },
   });

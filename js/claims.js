@@ -117,6 +117,37 @@ const Claims = {
 
 function rerenderClaims() { if (/^#\/claims/.test(location.hash) && !document.querySelector('.modal-back')) render(); }
 
+/* ---------------- Claimants: you or your staff ---------------- */
+function staffList() {
+  const out = [], seen = new Set();
+  DB.data.employees.filter(e => e.status !== 'resigned').forEach(e => {
+    const linked = e.contactId && DB.get('contacts', e.contactId);
+    if (linked) seen.add(linked.id);
+    out.push({ name: e.name, value: linked ? linked.id : 'emp:' + e.id });
+  });
+  DB.data.contacts.filter(c => c.type === 'employee' && !seen.has(c.id)).forEach(c => { seen.add(c.id); out.push({ name: c.name, value: c.id }); });
+  return { staff: out.sort((a, b) => a.name.localeCompare(b.name)), seen };
+}
+/** Staff first (Employees List + staff contacts), then other contacts. */
+function claimantOptions(blank) {
+  const { staff, seen } = staffList();
+  const others = DB.data.contacts.filter(c => !seen.has(c.id) && c.type !== 'customer').sort((a, b) => a.name.localeCompare(b.name)).map(c => [c.id, c.name]);
+  return [['', blank], ...(staff.length ? [{ group: 'Staff', options: staff.map(x => [x.value, x.name]) }] : []), ...(others.length ? [{ group: 'Other contacts', options: others }] : [])];
+}
+/** A receipt file named after a staff member ("Radzmin Syah Mara Training RM100.pdf") is that person's claim. */
+function claimantFromFile(c) {
+  const fn = ' ' + String(c.fileName || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() + ' ';
+  const skip = ['bin', 'binti', 'bte', 'hj', 'haji', 'hajah', 'mohd', 'muhammad', 'md', 'nor', 'nur', 'siti', 'abdul', 'abd'];
+  for (const k of staffList().staff) {
+    const w = k.name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(x => x.length >= 3);
+    if (!w.length) continue;
+    if (fn.startsWith(' ' + w.slice(0, 2).join(' ') + ' ')) return k;
+    const first = w.find(x => !skip.includes(x));
+    if (first && first.length >= 4 && fn.startsWith(' ' + first + ' ')) return k;
+  }
+  return null;
+}
+
 /* ---------------- Duplicates & undo ---------------- */
 /** Other (not rejected) claims that look like the same payment: same receipt no., or same printed total and same date / same merchant within a week. */
 function claimDuplicates(c) {
@@ -196,12 +227,18 @@ function claimPost(c, v, lines) {
     let contactId;
     if (v.as === 'claim') {
       contactId = v.claimantId;
+      if (contactId && contactId.startsWith('emp:')) {      // staff from the Employees List without a contact yet
+        const emp = DB.get('employees', contactId.slice(4));
+        if (!emp) throw new Error('That employee no longer exists');
+        contactId = staffContact(emp).id;
+      }
       if (!contactId) {
         if (!v.claimantName) throw new Error('Choose or type the claimant (the person who paid)');
         const same = DB.data.contacts.find(x => x.name.trim().toLowerCase() === v.claimantName.trim().toLowerCase());
         contactId = same ? same.id : DB.upsert('contacts', { type: 'supplier', entity: 'individual', name: v.claimantName, terms: 0, notes: 'Expense claims' }, 'Contact').id;
       }
-      s.claimantId = contactId;
+      // staff claims don't change your default claimant
+      if ((C.contact(contactId) || {}).type !== 'employee') s.claimantId = contactId;
     } else {
       contactId = v.supplierId;
       if (!contactId) {
@@ -218,12 +255,12 @@ function claimPost(c, v, lines) {
     doc.dueDate = v.as === 'claim' ? doc.date : defaultDue(doc);
     DB.takeNumber(C.prefix('bill'), doc.number);
     DB.upsert('docs', doc, 'Bill');
-    posted = { postedAs: v.as, docId: doc.id, postedNumber: doc.number };
+    posted = { postedAs: v.as, docId: doc.id, postedNumber: doc.number, contactId };
   }
   s.postAs = v.as; s.accountId = v.accountId || '';
   DB.upsert('claims', Object.assign({}, c, posted, {
     status: 'approved', approvedAt: new Date().toISOString(), approvedBy: Auth.userName(), total,
-    edited: { as: v.as, merchant, ref: v.ref, date: v.date, accountId: v.accountId, lines: origLines, currency: cur, fx },
+    edited: { as: v.as, claimantId: v.as === 'claim' ? posted.contactId : undefined, merchant, ref: v.ref, date: v.date, accountId: v.accountId, lines: origLines, currency: cur, fx },
   }), 'Claim');
   Claims.move(c, 'Approved');
   return posted;
@@ -244,9 +281,10 @@ function claimReviewModal(c) {
     })
     : [{ description: merchant ? 'Purchase from ' + merchant : '', qty: 1, price: d.total ?? '', taxCodeId: '' }]);
   const defAs = ed.as || (d.document_type === 'invoice' && d.due_date ? 'bill' : s.postAs || 'claim');
-  const claimant = C.contact(s.claimantId);
   const lineRow = l => `<tr><td><input data-f="description" value="${E(l.description || '')}"></td><td><input data-f="qty" type="number" step="any" class="right" value="${E(l.qty ?? 1)}" style="width:70px"></td><td><input data-f="price" type="number" step="0.01" class="right" value="${E(l.price ?? '')}" style="width:100px"></td><td>${UI.select('', UI.taxOptions('purchase'), l.taxCodeId || '', 'data-f="taxCodeId"')}</td><td><button type="button" class="btn link" data-rm>✕</button></td></tr>`;
   const locked = c.status === 'approved';
+  const guess = !locked && claimantFromFile(c);
+  const claimantVal = ed.claimantId || (guess ? guess.value : (C.contact(s.claimantId) ? s.claimantId : ''));
   const baseCur = DB.data.settings.baseCurrency;
   const recCur = String(ed.currency || d.currency || baseCur).toUpperCase();
   const body = `<div class="scan-wrap">
@@ -259,7 +297,7 @@ function claimReviewModal(c) {
         ${locked ? `<div class="alert info">Approved by ${E(c.approvedBy || '')} on ${E(U.fdatetime(c.approvedAt))} → ${E(c.postedNumber || '')}</div>` : ''}
         <div class="form-grid">
           ${UI.field('Post as', UI.select('as', CLAIM_AS, defAs, 'id="cl-as"'), 'full')}
-          ${UI.field('Claimant (who paid)', UI.select('claimantId', [['', '+ New claimant (type the name) …'], ...UI.contactOptions(null).slice(1)], claimant ? claimant.id : '', 'id="cl-who"'), 'cl-claim')}
+          ${UI.field('Claimant (who paid)', UI.select('claimantId', claimantOptions('+ New claimant (type the name) …'), claimantVal, 'id="cl-who"') + (guess ? `<div class="small muted">Picked from the file name — change it if needed.</div>` : ''), 'cl-claim')}
           ${UI.field('New claimant name', UI.input('claimantName', '', 'placeholder="Full name of the person who paid"'), 'cl-claim cl-newwho')}
           ${UI.field('Merchant / supplier', UI.input('merchant', merchant))}
           ${UI.field('Supplier contact', UI.select('supplierId', [['', '+ Create from merchant name'], ...UI.contactOptions('supplier').slice(1)], supplier ? supplier.id : ''), 'cl-sup')}

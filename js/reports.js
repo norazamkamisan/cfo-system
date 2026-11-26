@@ -355,7 +355,7 @@ route('/reports/ledger/:kind', (el, q, kind) => {
   const isC = kind === 'customer';
   const ctrl = C.sys(isC ? 'ar' : 'ap');
   const [from, to] = R.range(q, U.addMonths(U.today(), -3));
-  const contacts = DB.data.contacts.filter(c => c.type === (isC ? 'customer' : 'supplier') || c.type === 'both').sort((a, b) => a.name.localeCompare(b.name));
+  const contacts = DB.data.contacts.filter(c => c.type === (isC ? 'customer' : 'supplier') || c.type === 'both' || (!isC && c.type === 'employee')).sort((a, b) => a.name.localeCompare(b.name));
   const ids = q.contact ? [q.contact] : contacts.map(c => c.id);
   const L = C.ledger().filter(e => e.accountId === ctrl);
   const sign = isC ? 1 : -1;
