@@ -117,6 +117,53 @@ const Claims = {
 
 function rerenderClaims() { if (/^#\/claims/.test(location.hash) && !document.querySelector('.modal-back')) render(); }
 
+/* ---------------- Duplicates & undo ---------------- */
+/** Other (not rejected) claims that look like the same payment: same receipt no., or same printed total and same date / same merchant within a week. */
+function claimDuplicates(c) {
+  const key = x => {
+    const d = x.data || {}, e = x.edited || {};
+    return {
+      ref: String(e.ref ?? d.document_number ?? '').toUpperCase().replace(/[^A-Z0-9]/g, ''),
+      total: U.num(d.total ?? x.total), date: e.date || d.date || '',
+      m: String(e.merchant ?? d.vendor_name ?? '').toLowerCase().replace(/\b(sdn|bhd|berhad|pbc|inc|ltd)\b/g, '').replace(/[^a-z0-9]/g, '').slice(0, 12),
+    };
+  };
+  const a = key(c);
+  const days = (p, q) => (p && q ? Math.abs(new Date(p) - new Date(q)) / 864e5 : 99);
+  return DB.data.claims.filter(o => o.id !== c.id && o.status !== 'rejected').filter(o => {
+    const b = key(o);
+    if (a.ref.length >= 4 && a.ref === b.ref) return true;
+    if (!a.total || Math.abs(a.total - b.total) > 0.005) return false;
+    return (a.date && a.date === b.date) || (a.m.length >= 3 && a.m === b.m && days(a.date, b.date) <= 7);
+  });
+}
+
+/** Approved by mistake: void the Bill (or delete the Withdrawal) it posted and reject or re-open the claim. */
+function claimUndoModal(c) {
+  const doc = c.docId && DB.get('docs', c.docId), tx = c.txId && DB.get('transactions', c.txId);
+  if (doc && C.paymentsFor(doc).length) return UI.toast(`${doc.number} already has payments — delete those payments first.`, 'err');
+  const what = doc ? `void ${doc.type === 'bill' ? 'Bill' : 'document'} <b>${E(doc.number)}</b>` : tx ? `delete Withdrawal <b>${E(tx.number)}</b>` : 'clear the approval';
+  const dup = claimDuplicates(c)[0];
+  UI.modal(`Undo claim ${c.number}`, `<p>This will ${what} (${E(U.money(c.total || 0))}) so it no longer counts in your books.</p>
+    <div class="form-grid">
+      ${UI.field('Then mark the claim as', UI.select('to', [['rejected', 'Rejected'], ['pending', 'Waiting for approval again']], 'rejected'))}
+      ${UI.field('Reason', UI.input('reason', dup ? `Duplicate of ${dup.number}` : ''))}
+    </div>`, {
+    submitLabel: 'Undo approval',
+    onSubmit: v => {
+      if (doc) { doc.status = 'void'; DB.log('Voided', 'Bill', doc, 'Claim ' + c.number + ' undone'); }
+      if (tx) DB.remove('transactions', tx.id, 'Withdrawal');
+      const back = v.to === 'pending';
+      const next = Object.assign({}, c, { status: back ? 'pending' : 'rejected', reason: back ? '' : v.reason, undoneAt: new Date().toISOString(), undoneBy: Auth.userName(), voidedNumber: c.postedNumber });
+      ['docId', 'txId', 'postedNumber', 'postedAs', 'approvedAt', 'approvedBy'].forEach(k => delete next[k]);
+      DB.upsert('claims', next, 'Claim');
+      Claims.move(c, back ? 'Scanned' : 'Rejected');
+      UI.toast(`Claim ${c.number} undone — ${c.postedNumber || 'entry'} ${doc ? 'voided' : 'removed'}`, 'ok');
+      render();
+    },
+  });
+}
+
 /* ---------------- Approve / post ---------------- */
 function claimPost(c, v, lines) {
   const s = DB.data.claimSettings;
@@ -206,6 +253,7 @@ function claimReviewModal(c) {
         ${c.fileUrl ? `<p class="small mt"><a href="${E(c.fileUrl)}" target="_blank" rel="noopener">Open in Google Drive ↗</a></p>` : ''}</div>
       <div>
         ${c.error ? `<div class="alert info">${E(c.error)}</div>` : ''}
+        ${!locked && claimDuplicates(c).length ? `<div class="alert" style="background:var(--red-bg);color:var(--red)">⚠ Looks like the same payment as ${claimDuplicates(c).map(o => `<b>${E(o.number)}</b> (${E(t((CLAIM_STATUS[o.status] || [o.status])[0]))})`).join(', ')} — an invoice and its receipt are one payment. Reject this one if it's a duplicate.</div>` : ''}
         ${c.note && !locked ? `<div class="alert info">🔍 ${E(c.note)}</div>` : ''}
         ${locked ? `<div class="alert info">Approved by ${E(c.approvedBy || '')} on ${E(U.fdatetime(c.approvedAt))} → ${E(c.postedNumber || '')}</div>` : ''}
         <div class="form-grid">
@@ -325,11 +373,12 @@ route('/claims', (el, q) => {
       { label: 'Merchant', render: c => E((c.edited && c.edited.merchant) || (c.data && c.data.vendor_name) || c.fileName || '') },
       { label: 'Receipt date', render: c => E(U.fdate ? U.fdate((c.edited && c.edited.date) || (c.data && c.data.date) || '') : ((c.data && c.data.date) || '')) },
       { label: 'Amount', cls: 'num', render: c => total(c) != null ? U.amt(total(c)) : '' },
-      { label: 'Status', render: c => { const [l, k] = CLAIM_STATUS[c.status] || [c.status, '']; return `<span class="badge ${k}">${E(t(l))}</span>${c.error && c.status === 'pending' ? ' <span title="' + E(c.error) + '">⚠</span>' : ''}`; } },
+      { label: 'Status', render: c => { const [l, k] = CLAIM_STATUS[c.status] || [c.status, '']; const dup = c.status !== 'rejected' && c.status !== 'scanning' ? claimDuplicates(c) : []; return `<span class="badge ${k}">${E(t(l))}</span>${c.error && c.status === 'pending' ? ' <span title="' + E(c.error) + '">⚠</span>' : ''}${dup.length ? ` <span class="badge red" title="Same payment as ${E(dup.map(o => o.number).join(', '))}">Possible duplicate of ${E(dup.map(o => o.number).join(', '))}</span>` : ''}`; } },
       { label: 'Posted to', render: c => c.docId ? `<a href="#/doc/${E(c.docId)}">${E(c.postedNumber)}</a>` : c.txId ? `<a href="#/transactions">${E(c.postedNumber)}</a>` : c.reason ? `<span class="small muted">${E(c.reason)}</span>` : '' },
-      { label: '', render: c => c.status === 'scanning' ? '' : `<button class="btn sm ${c.status === 'pending' ? 'primary' : ''}" data-review="${E(c.id)}">${c.status === 'pending' ? 'Review' : 'View'}</button>${c.status === 'rejected' ? ` <button class="btn sm" data-reopen="${E(c.id)}">Reopen</button>` : ''}` },
+      { label: '', render: c => c.status === 'scanning' ? '' : `<button class="btn sm ${c.status === 'pending' ? 'primary' : ''}" data-review="${E(c.id)}">${c.status === 'pending' ? 'Review' : 'View'}</button>${c.status === 'rejected' ? ` <button class="btn sm" data-reopen="${E(c.id)}">Reopen</button>` : ''}${c.status === 'approved' ? ` <button class="btn sm" data-undo="${E(c.id)}">Undo</button>` : ''}` },
     ], rows, { empty: tab === 'pending' ? 'No claims waiting for approval.' : 'No claims yet.' })}`;
   $$('[data-review]', el).forEach(b => b.onclick = () => claimReviewModal(DB.get('claims', b.dataset.review)));
+  $$('[data-undo]', el).forEach(b => b.onclick = () => claimUndoModal(DB.get('claims', b.dataset.undo)));
   $$('[data-reopen]', el).forEach(b => b.onclick = () => {
     const c = DB.get('claims', b.dataset.reopen);
     DB.upsert('claims', Object.assign({}, c, { status: 'pending', reason: '' }), 'Claim');
