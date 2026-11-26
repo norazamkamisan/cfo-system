@@ -41,8 +41,13 @@ On approval you choose how it's posted:
 - **Supplier bill:** not paid yet. Creates a Bill owed to the merchant.
 
 Receipts move in Drive from the inbox to **Scanned**, then to **Approved** or **Rejected**. Claims sync to every device
-like the rest of the books. Requires the *Google Drive · automatic* helper, version 2 (update it from the Sync page) and an
-Anthropic API key in Integrated Apps.
+like the rest of the books. Requires the *Google Drive · automatic* helper, version 2 (update it from the Sync page).
+
+**Reading receipts:** with an Anthropic API key (Integrated Apps), A.I reads everything, including line items. Without a
+key, or if A.I fails, the app uses **free text recognition** in the browser (Tesseract.js for photos and scanned PDFs,
+pdf.js for PDFs with text). It fills in the merchant, date, receipt no., tax and total only, so check each field. The engine
+downloads once on first use, so you need to be online the first time. The same fallback is used on the A.I Scan page
+(**🔍 Read text (free)**).
 
 ## Publishing updates
 After changing files: `git add -A`, `git commit -m "…"`, `git push`. GitHub Pages republishes in about a minute,

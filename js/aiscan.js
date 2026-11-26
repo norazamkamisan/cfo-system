@@ -112,13 +112,13 @@ route('/ai-scan', (el) => {
   let file = null;
   let data = { vendor_name: '', document_type: 'invoice', document_number: '', date: U.today(), due_date: '', currency: DB.data.settings.baseCurrency, line_items: [{ description: '', quantity: 1, unit_price: '', tax_rate: 0, amount: '' }] };
   el.innerHTML = `${UI.pageHead('A.I Scan', null, `<a class="btn" href="#/control/apps">${E(t('Integrated Apps'))}</a>`)}
-    ${hasKey ? '' : `<div class="alert info">Add your Anthropic API key in <a href="#/control/apps">Control Panel → Integrated Apps</a> to read receipts automatically. Without it you can still view the receipt beside the form and type the details.</div>`}
+    ${hasKey ? '' : `<div class="alert info">No Anthropic API key set, so <b>🔍 Read text (free)</b> uses free text recognition in your browser: it fills in the merchant, date, receipt no., tax and total — check them before saving. Add a key in <a href="#/control/apps">Control Panel → Integrated Apps</a> for full A.I reading with line items.</div>`}
     <div class="scan-wrap">
       <div class="card">
         <label class="scan-drop" id="drop"><input type="file" id="file" accept="image/*,application/pdf" capture="environment" hidden>
           <div style="font-size:34px">📄</div><b>Drop a receipt or supplier invoice here</b><div class="small">or click to choose / take a photo · JPG, PNG, PDF</div></label>
         <div class="scan-preview mt" id="preview"></div>
-        <div class="btn-row mt"><button class="btn primary" id="scan" disabled>✨ Scan with A.I</button><span class="small muted" id="status"></span></div>
+        <div class="btn-row mt"><button class="btn primary" id="scan" disabled>${hasKey ? '✨ Scan with A.I' : '🔍 Read text (free)'}</button><span class="small muted" id="status"></span></div>
       </div>
       <div class="card" id="result"></div>
     </div>`;
@@ -192,8 +192,8 @@ route('/ai-scan', (el) => {
       $('#status', el).textContent = '';
       file = f.type === 'application/pdf' ? await scanPreparePdf(f) : await scanPrepareImage(f);
       $('#preview', el).innerHTML = file.mediaType === 'application/pdf' ? `<iframe src="${file.url}" style="width:100%;height:520px;border:1px solid var(--border);border-radius:6px"></iframe>` : `<img src="${file.url}" alt="receipt">`;
-      $('#scan', el).disabled = !hasKey;
-      if (hasKey) $('#scan', el).click();
+      $('#scan', el).disabled = false;
+      $('#scan', el).click();
     } catch (err) { UI.toast(err.message, 'err'); }
   };
   $('#file', el).onchange = e => { if (e.target.files[0]) load(e.target.files[0]); };
@@ -204,13 +204,15 @@ route('/ai-scan', (el) => {
   $('#scan', el).onclick = async () => {
     if (!file) return;
     const b = $('#scan', el), st = $('#status', el);
-    b.disabled = true; st.textContent = 'Reading document… this can take up to a minute.';
+    b.disabled = true; st.textContent = hasKey ? 'Reading document… this can take up to a minute.' : 'Reading text… the first time takes longer while the free engine downloads.';
     try {
-      const r = await scanWithClaude(file);
+      const r = hasKey ? await scanWithClaude(file) : await OCR.read(file);
+      // a tax rate with no matching purchase tax code (e.g. 6% service tax) stays inside the cost
+      (r.line_items || []).forEach(l => { if (U.num(l.tax_rate) && !DB.data.taxSettings.codes.some(x => U.num(x.rate) === U.num(l.tax_rate) && x.type !== 'sales') && l.unit_price != null) { l.unit_price = U.r2(l.unit_price * (1 + U.num(l.tax_rate) / 100)); l.tax_rate = 0; } });
       data = Object.assign(data, r, { line_items: r.line_items && r.line_items.length ? r.line_items : data.line_items });
       DB.log('Scanned', 'A.I Scan', r.document_number || r.vendor_name || 'document');
       DB.save();
-      st.textContent = '✔ Done — review the details on the right.';
+      st.textContent = hasKey ? '✔ Done — review the details on the right.' : '✔ Done — free text recognition fills in the main fields only; please check them.';
       drawResult();
     } catch (err) { st.textContent = ''; UI.toast(err.message, 'err'); }
     finally { b.disabled = false; }

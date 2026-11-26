@@ -69,19 +69,25 @@ const Claims = {
     const key = DB.key();
     let c = DB.get('claims', id);
     if (!c) return;
-    let data = null, error = '';
-    if (!DB.data.integrations.aiKey) error = 'No A.I key set (Control Panel → Integrated Apps) — type the details in by hand.';
-    else {
-      try {
-        const file = await Claims.prepared(c.fileId);
-        data = await scanWithClaude(file);
-        URL.revokeObjectURL(file.url);
-      } catch (e) { error = e.message; }
-    }
+    let data = null, error = '', note = '';
+    try {
+      const file = await Claims.prepared(c.fileId);
+      if (DB.data.integrations.aiKey) {
+        try { data = await scanWithClaude(file); } catch (e) { error = e.message; }
+      }
+      if (!data) {                         // no key, or A.I failed: free text recognition in the browser
+        try {
+          data = await OCR.read(file);
+          note = (error ? `A.I Scan failed (${error}), so this` : 'This') + ' was read with free text recognition (no A.I key). Check every field — line items are not split.';
+          error = '';
+        } catch (e) { error = (error ? error + ' · ' : '') + e.message + ' — type the details in by hand.'; }
+      }
+      URL.revokeObjectURL(file.url);
+    } catch (e) { error = e.message; }
     if (DB.key() !== key) return;
     c = DB.get('claims', id);
     if (!c || (c.status !== 'scanning' && c.status !== 'pending')) return;
-    DB.upsert('claims', Object.assign({}, c, { status: 'pending', data: data || c.data || null, error, scannedAt: new Date().toISOString() }), 'Claim');
+    DB.upsert('claims', Object.assign({}, c, { status: 'pending', data: data || c.data || null, error, note, scannedAt: new Date().toISOString() }), 'Claim');
   },
 
   /** Download a receipt from Drive as a Blob. */
@@ -171,7 +177,12 @@ function claimReviewModal(c) {
   const merchant = ed.merchant ?? d.vendor_name ?? '';
   const supplier = DB.data.contacts.find(x => merchant && x.type !== 'customer' && x.name.toLowerCase() === merchant.toLowerCase());
   const taxFor = rate => (DB.data.taxSettings.codes.find(x => U.num(x.rate) === U.num(rate) && x.type !== 'sales') || {}).id || '';
-  const lines = ed.lines || (d.line_items && d.line_items.length ? d.line_items.map(l => ({ description: l.description, qty: l.quantity ?? 1, price: l.unit_price ?? (l.amount != null && l.quantity ? U.r2(l.amount / l.quantity) : l.amount ?? ''), taxCodeId: taxFor(l.tax_rate) }))
+  const lines = ed.lines || (d.line_items && d.line_items.length ? d.line_items.map(l => {
+      const unit = l.unit_price ?? (l.amount != null && l.quantity ? U.r2(l.amount / l.quantity) : l.amount ?? '');
+      const tx = taxFor(l.tax_rate);
+      // no matching purchase tax code (e.g. 6% service tax): keep the tax inside the cost so the total still matches
+      return { description: l.description, qty: l.quantity ?? 1, price: !tx && U.num(l.tax_rate) && unit !== '' ? U.r2(U.num(unit) * (1 + U.num(l.tax_rate) / 100)) : unit, taxCodeId: tx };
+    })
     : [{ description: merchant ? 'Purchase from ' + merchant : '', qty: 1, price: d.total ?? '', taxCodeId: '' }]);
   const defAs = ed.as || (d.document_type === 'invoice' && d.due_date ? 'bill' : s.postAs || 'claim');
   const claimant = C.contact(s.claimantId);
@@ -182,6 +193,7 @@ function claimReviewModal(c) {
         ${c.fileUrl ? `<p class="small mt"><a href="${E(c.fileUrl)}" target="_blank" rel="noopener">Open in Google Drive ↗</a></p>` : ''}</div>
       <div>
         ${c.error ? `<div class="alert info">${E(c.error)}</div>` : ''}
+        ${c.note && !locked ? `<div class="alert info">🔍 ${E(c.note)}</div>` : ''}
         ${locked ? `<div class="alert info">Approved by ${E(c.approvedBy || '')} on ${E(U.fdatetime(c.approvedAt))} → ${E(c.postedNumber || '')}</div>` : ''}
         <div class="form-grid">
           ${UI.field('Post as', UI.select('as', CLAIM_AS, defAs, 'id="cl-as"'), 'full')}
@@ -287,7 +299,7 @@ route('/claims', (el, q) => {
       ${s.folderUrl ? `<a class="btn" href="${E(s.folderUrl)}" target="_blank" rel="noopener">📁 Open Claims folder</a>` : ''}
       <button class="btn" id="cl-set">⚙ Settings</button>
       <button class="btn primary" id="cl-check" ${ready ? '' : 'disabled'}>↻ Check folder now</button>`)}
-    ${ready ? `<div class="alert info">Put receipts (photo or PDF) in <b>Google Drive › CFO System › Claims › ${E(DB.data.settings.company)}</b>, or tap <b>📷 Add receipt</b>. The app reads each one with A.I and lists it here. <b>Nothing is posted to your books until you approve it.</b>${DB.data.integrations.aiKey ? '' : ' <br>Add your Anthropic API key in <a href="#/control/apps">Integrated Apps</a> so receipts are read automatically.'}</div>`
+    ${ready ? `<div class="alert info">Put receipts (photo or PDF) in <b>Google Drive › CFO System › Claims › ${E(DB.data.settings.company)}</b>, or tap <b>📷 Add receipt</b>. The app reads each one with A.I and lists it here. <b>Nothing is posted to your books until you approve it.</b>${DB.data.integrations.aiKey ? '' : ' <br>No Anthropic API key yet, so receipts are read with <b>free text recognition</b> (merchant, date, tax and total only — check each one). Add a key in <a href="#/control/apps">Integrated Apps</a> for full A.I reading.'}</div>`
       : `<div class="alert info">Claims need the <b>Google Drive · automatic</b> connection. Set it up in <a href="#/control/sync">Control Panel → Sync (PC &amp; phone)</a>.</div>`}
     <div class="tabs">${[['pending', 'Waiting for approval'], ['approved', 'Approved'], ['rejected', 'Rejected'], ['all', 'All']].map(([k, l]) => `<a href="#/claims?tab=${k}" class="${tab === k ? 'active' : ''}">${E(t(l))}${k !== 'all' ? ` (${count(k)})` : ''}</a>`).join('')}</div>
     ${UI.table([
