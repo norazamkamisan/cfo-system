@@ -69,7 +69,7 @@ const OCR = {
   async read(file) {
     const text = await OCR.text(file);
     if (text.replace(/\s/g, '').length < 10) throw new Error('No readable text found — try a sharper, well-lit photo.');
-    return OCR.parse(text);
+    return OCR.parse(text, { own: typeof DB !== 'undefined' ? DB.data.settings.company : '' });
   },
 
   /* ---------------- rules ---------------- */
@@ -99,23 +99,28 @@ const OCR = {
     return null;
   },
 
-  parse(raw) {
-    const lines = String(raw).split(/\r?\n/).map(l => l.replace(/[|]/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean);
-    const payLine = /\b(cash|tunai|change|baki|tender|tendered|bayaran|rounding|pembundaran|visa|master\s*card|debit|credit\s*card|e-?wallet|tng|grabpay|boost|duitnow|you\s*save|discount|diskaun)\b/i;
+  /** opts.own = this company's name (never the merchant: it's the "bill to" party). */
+  parse(raw, opts = {}) {
+    const lines = String(raw).split(/\r?\n/)
+      .map(l => l.replace(/[|]/g, ' ').replace(/^\s*\\?[-•*]\s+/, '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+    // a line can hold several labelled amounts ("Subtotal 20.00 Total 21.60") — split before each label
+    const SPLIT = /(?<!sub\s?-?\s?|grand\s|net\s|jumlah\s)(?=\b(?:sub\s?-?\s?total|grand\s+total|net\s+total|total(?!\s*(?:excl|before))|sst\b|service\s+tax|sales\s+tax|gst\b|amount\s+paid|amount\s+due|rounding|cash\b|change\b))/i;
+    const segs = lines.flatMap(l => l.split(SPLIT).map(s => s.trim()).filter(Boolean));
+    const payLine = /\b(cash|tunai|change|baki|tender|tendered|rounding|pembundaran|visa|master\s*card|debit\s*card|credit\s*card|e-?wallet|tng|grabpay|boost|duitnow|you\s*save|discount|diskaun)\b/i;
     const subLine = /sub\s*-?\s*total|jumlah\s*kecil/i;
     const taxLine = /\b(sst|service\s*tax|sales\s*tax|gst|tax|cukai)\b/i;
-    const notTax = /tax\s*invoice|invois|reg|no\b|id\b|incl|inclusive|termasuk|exempt|tin\b|before\s*tax|excl/i;
+    const notTax = /tax\s*invoice|invois|reg(istration)?\b|\bno\b|\bid\b|incl|inclusive|termasuk|exempt|\btin\b|before\s*tax|excl/i;
     const totalStrong = /grand\s*total|jumlah\s*besar|net\s*total|amount\s*due|total\s*amount|total\s*payable|jumlah\s*bersih|jumlah\s*perlu\s*dibayar|total\s*\(?(?:rm|myr)\)?/i;
     const totalWeak = /\btotal\b|\bjumlah\b|\bamount\b/i;
-    const totalNot = /sub\s*-?\s*total|total\s*(qty|quantity|items?|disc\w*|savings?|tax|sst|gst|excl\w*)|items?\s*total|no\.?\s*of/i;
+    const totalNot = /sub\s*-?\s*total|total\s*(qty|quantity|items?|disc\w*|savings?|tax|sst|gst|excl\w*|before)|items?\s*total|no\.?\s*of/i;
 
     let best = null, subtotal = null, tax = null, rate = null;
-    lines.forEach((l, i) => {
+    segs.forEach((l, i) => {
       const am = OCR.amounts(l);
-      const nextAm = () => (lines[i + 1] ? OCR.amounts(lines[i + 1]) : []);
-      if (subLine.test(l)) { const a = am.length ? am : nextAm(); if (a.length) subtotal = a[a.length - 1]; return; }
-      if (taxLine.test(l) && !notTax.test(l) && !totalStrong.test(l)) {
-        const a = am.length ? am : nextAm();
+      const nxt = segs[i + 1];
+      const a = am.length ? am : (nxt && !/[a-z]{3}/i.test(nxt.replace(/\b(rm|myr|usd)\b/ig, '')) ? OCR.amounts(nxt) : []);
+      if (subLine.test(l)) { if (a.length) subtotal = a[a.length - 1]; return; }
+      if (taxLine.test(l) && !notTax.test(l) && !totalStrong.test(l) && !/^\W*total\b/i.test(l)) {
         const r = l.match(/(\d{1,2}(?:\.\d+)?)\s*%/);
         if (r) rate = parseFloat(r[1]);
         const v = a.filter(x => !r || x !== parseFloat(r[1]));
@@ -124,55 +129,83 @@ const OCR = {
       }
       if (payLine.test(l) && !totalStrong.test(l)) return;
       const score = totalStrong.test(l) ? 3 : totalWeak.test(l) && !totalNot.test(l) ? 2 : 0;
-      if (!score) return;
-      const a = am.length ? am : nextAm();
-      if (!a.length) return;
+      if (!score || !a.length) return;
       const v = Math.max(...a);
       if (!best || score > best.score || (score === best.score && v >= best.v)) best = { score, v };
     });
     let total = best ? best.v : null;
-    if (total == null) {                                  // fall back to the largest amount not on a payment line
-      const all = lines.filter(l => !payLine.test(l)).flatMap(l => OCR.amounts(l));
+    if (total == null) {
+      const all = segs.filter(l => !payLine.test(l)).flatMap(l => OCR.amounts(l));
       if (all.length) total = Math.max(...all);
     }
     if (tax != null && total != null && tax >= total) tax = null;
     if (rate == null && tax && total) {
-      const net = subtotal || total - tax;
-      const guess = Math.round(tax / net * 100);
+      const guess = Math.round(tax / (subtotal || total - tax) * 100);
       if ([5, 6, 8, 10].includes(guess)) rate = guess;
     }
 
     let date = null;
     for (const l of lines) { date = OCR.date(l); if (date) break; }
 
+    // "Label:" on one line and the value on the next
+    const valueAfter = re => {
+      for (let i = 0; i < lines.length; i++) {
+        const m = lines[i].match(re);
+        if (!m) continue;
+        const rest = lines[i].slice(m.index + m[0].length).replace(/^[\s:#.\-]+/, '').trim();
+        if (rest) return rest;
+        if (lines[i + 1] && !/:\s*$/.test(lines[i + 1])) return lines[i + 1];
+      }
+      return null;
+    };
+
     let number = null;
-    const noise = /\b(reg|sst|gst|tel|phone|fax|tin|co\.?\s*no|company|roc|ssm|table|meja|pax|cashier|juruwang|terminal|pos\s*id)\b/i;
-    for (const l of lines) {
-      if (noise.test(l)) continue;
-      const m = l.match(/\b(?:invoice|inv|receipt|rcpt|resit|bill|doc(?:ument)?|ref(?:erence)?|trans(?:action)?|order|cheque|slip)\s*(?:no\.?|number|num|#)?\s*[:#.]?\s*([A-Z0-9][A-Z0-9\-/]{2,})/i);
-      if (m && /\d/.test(m[1])) { number = m[1]; break; }
-      const s = l.match(/\b((?:INV|RCP|RCPT|RC|OR|CS|BL|SI|TI)[-/]?\d{3,}[A-Z0-9\-/]*)\b/i);
-      if (s) { number = s[1]; break; }
+    const noise = /\b(reg|sst|gst|tel|phone|fax|tin|co\.?\s*no|company|roc|ssm|table|meja|pax|cashier|juruwang|terminal|pos\s*id|account)\b/i;
+    const NUMLBL = /\b(?:invoice|inv|receipt|rcpt|resit|bill|doc(?:ument)?|ref(?:erence)?|trans(?:action)?|order|cheque|slip)\s*(?:no\.?|number|num|#)?\s*[:#.]?/i;
+    for (let i = 0; i < lines.length && !number; i++) {
+      const l = lines[i];
+      const m = l.match(NUMLBL);
+      if (m) {
+        let v = l.slice(m.index + m[0].length).trim();
+        if (!v && lines[i + 1]) v = lines[i + 1];
+        const tok = (v.match(/^[A-Z0-9][A-Z0-9\-/]{2,}(?:\s\d{3,})*/i) || [])[0];
+        if (tok && /\d/.test(tok) && !OCR.date(tok) && !/^\d+[.,]\d{2}$/.test(tok)) { number = tok.replace(/\s+/g, ''); break; }
+      }
+      const s = !noise.test(l) && l.match(/\b((?:INV|RCP|RCPT|RC|OR|CS|BL|SI|TI)[-/]?\d{3,}[A-Z0-9\-/]*)\b/i);
+      if (s) number = s[1];
     }
 
     let reg = null;
-    for (const l of lines) {
+    for (const l of lines.filter(x => !/copyright|all rights reserved|©/i.test(x))) {
       const m = l.match(/\b(20\d{10})\b/) || l.match(/\b(\d{4,8}-[A-Z])\b/) || l.match(/\b([A-Z]\d{2}-\d{4}-\d{8})\b/);
       if (m) { reg = m[1]; break; }
     }
 
-    const head = /^(receipt|resit|official receipt|tax invoice|invoice|invois|cash bill|bill|welcome|selamat datang|thank|terima kasih|copy|duplicate|customer copy)\b/i;
-    const top = lines.slice(0, 8).filter(l => !head.test(l) && !/@|www\.|https?:|tel|fax|^\W*$/i.test(l) && !OCR.amounts(l).length && !OCR.date(l));
+    const norm = s => String(s || '').toLowerCase().replace(/\b(sdn|bhd|berhad|plt|enterprise)\b/g, '').replace(/[^a-z0-9]/g, '');
+    const own = norm(opts.own);
+    const isOwn = l => own.length >= 4 && norm(l).includes(own);
+    const clean = s => s && s.replace(/^[\s:\-]+|[\s.,:]+$/g, '').slice(0, 80);
+    const head = /^(payment\s+)?(receipt|resit|official receipt|e-?receipt|fpx receipt|tax invoice|invoice|invois|cash bill|bill|welcome|selamat datang|thank|terima kasih|dear|copy|duplicate|customer copy|page\b|payment|transaction|date|invoice number|receipt number|bill to|reference)\b/i;
     const letters = l => (l.match(/[A-Za-z]/g) || []).length;
-    const named = top.find(l => /\b(sdn\.?\s*bhd|bhd|berhad|plt|enterprise|trading|restoran|restaurant|cafe|kedai|mart|store|station|hardware|pharmacy|farmasi|hotel|services?)\b/i.test(l));
-    const merchant = named || top.find(l => letters(l) >= 3 && letters(l) / l.replace(/\s/g, '').length > 0.6) || null;
+    const company = /\b(sdn\.?\s*bhd|bhd|berhad|plt|enterprise|trading|restoran|restaurant|cafe|kedai|mart|store|station|hardware|pharmacy|farmasi|hotel|services?|inc|llc|ltd|limited|pbc|corp(oration)?|majlis|lembaga|jabatan|kementerian|universiti|tenaga)\b/i;
+    let merchant = null;
+    const to = valueAfter(/^(?:to|paid\s+to|payee|merchant(?:\s+name)?|biller|seller|penerima|kepada)\b\s*:?/i);
+    if (to && letters(to) >= 3 && !isOwn(to)) merchant = to;
+    if (!merchant) {
+      const ty = lines.map(l => l.match(/(?:thank\s+you\s+for\s+(?:using|shopping\s+(?:at|with)|choosing)|terima\s+kasih\s+kerana\s+(?:menggunakan|membeli\s+di))\s+([A-Za-z][\w&'. -]{2,40})/i)).find(Boolean);
+      if (ty) merchant = ty[1].replace(/\s+(?:we|our|and|for)\b.*$/i, '').replace(/[.,]\s.*$/, '');
+    }
+    const top = lines.slice(0, 15).filter(l => !head.test(l) && !isOwn(l) && !/@|www\.|https?:|\btel\b|\bfax\b|^\W*$/i.test(l) && !OCR.amounts(l).length && !OCR.date(l));
+    if (!merchant) merchant = top.find(l => company.test(l) && letters(l) / l.replace(/\s/g, '').length > 0.6) || null;
+    if (!merchant) merchant = top.slice(0, 6).find(l => letters(l) >= 3 && letters(l) / l.replace(/\s/g, '').length > 0.6) || null;
+    merchant = clean(merchant);
 
-    const type = lines.some(l => /credit\s*note|nota\s*kredit/i.test(l)) ? 'credit_note' : lines.some(l => /\binvoice\b|\binvois\b/i.test(l)) ? 'invoice' : 'receipt';
+    const currency = /\b(RM|MYR)\b/i.test(raw) ? 'MYR' : /\bUSD\b|US\$|\$\s?\d/.test(raw) ? 'USD' : /\bSGD\b|S\$/.test(raw) ? 'SGD' : /€|\bEUR\b/.test(raw) ? 'EUR' : total != null ? 'MYR' : null;
+    const type = lines.some(l => /credit\s*note|nota\s*kredit/i.test(l)) ? 'credit_note' : lines.some(l => /\binvoice\b|\binvois\b/i.test(l)) && !lines.some(l => /^(payment\s+|fpx\s+)?receipt\b/i.test(l)) ? 'invoice' : 'receipt';
     const net = total != null ? (subtotal != null && tax != null && Math.abs(subtotal + tax - total) < 0.06 ? subtotal : tax != null ? Math.round((total - tax) * 100) / 100 : total) : null;
     return {
       vendor_name: merchant, vendor_registration_no: reg, document_type: type, document_number: number,
-      date, due_date: null, currency: /\b(RM|MYR)\b/i.test(raw) || total != null ? 'MYR' : null,
-      subtotal, tax_total: tax, total,
+      date, due_date: null, currency, subtotal, tax_total: tax, total,
       line_items: net != null ? [{ description: merchant ? 'Purchase — ' + merchant : 'Purchase', quantity: 1, unit_price: net, tax_rate: tax ? rate : 0, amount: net }] : [],
       _ocr: true,
     };

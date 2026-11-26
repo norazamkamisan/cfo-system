@@ -120,9 +120,20 @@ function rerenderClaims() { if (/^#\/claims/.test(location.hash) && !document.qu
 /* ---------------- Approve / post ---------------- */
 function claimPost(c, v, lines) {
   const s = DB.data.claimSettings;
+  // foreign-currency receipt: post in the base currency at the rate entered on approval
+  const base = DB.data.settings.baseCurrency;
+  const cur = (v.currency || base).trim().toUpperCase();
+  const origLines = lines;
+  let fx = 1, fxNote = '';
+  if (cur !== base) {
+    fx = U.num(v.fx);
+    if (!(fx > 0)) throw new Error(`Enter the exchange rate: 1 ${cur} = how many ${base}?`);
+    fxNote = ` (${cur} ${U.amt(C.total({ lines: lines.map(l => ({ ...l, discount: 0 })) }))} @ ${fx})`;
+    lines = lines.map(l => ({ ...l, price: U.r2(l.price * fx) }));
+  }
   const total = C.total({ lines: lines.map(l => ({ ...l, discount: 0 })) });
   const merchant = v.merchant.trim();
-  const memo = `Claim ${c.number}${merchant ? ' — ' + merchant : ''}${v.ref ? ' #' + v.ref : ''}`;
+  const memo = `Claim ${c.number}${merchant ? ' — ' + merchant : ''}${v.ref ? ' #' + v.ref : ''}${fxNote}`;
   let posted;
   if (v.as === 'out') {
     if (!v.bank) throw new Error('Choose the bank / cash account it was paid from');
@@ -164,7 +175,7 @@ function claimPost(c, v, lines) {
   s.postAs = v.as; s.accountId = v.accountId || '';
   DB.upsert('claims', Object.assign({}, c, posted, {
     status: 'approved', approvedAt: new Date().toISOString(), approvedBy: Auth.userName(), total,
-    edited: { as: v.as, merchant, ref: v.ref, date: v.date, accountId: v.accountId, lines },
+    edited: { as: v.as, merchant, ref: v.ref, date: v.date, accountId: v.accountId, lines: origLines, currency: cur, fx },
   }), 'Claim');
   Claims.move(c, 'Approved');
   return posted;
@@ -188,6 +199,8 @@ function claimReviewModal(c) {
   const claimant = C.contact(s.claimantId);
   const lineRow = l => `<tr><td><input data-f="description" value="${E(l.description || '')}"></td><td><input data-f="qty" type="number" step="any" class="right" value="${E(l.qty ?? 1)}" style="width:70px"></td><td><input data-f="price" type="number" step="0.01" class="right" value="${E(l.price ?? '')}" style="width:100px"></td><td>${UI.select('', UI.taxOptions('purchase'), l.taxCodeId || '', 'data-f="taxCodeId"')}</td><td><button type="button" class="btn link" data-rm>✕</button></td></tr>`;
   const locked = c.status === 'approved';
+  const baseCur = DB.data.settings.baseCurrency;
+  const recCur = String(ed.currency || d.currency || baseCur).toUpperCase();
   const body = `<div class="scan-wrap">
       <div><div class="scan-preview" id="cl-prev"><p class="muted small">Loading receipt from Google Drive…</p></div>
         ${c.fileUrl ? `<p class="small mt"><a href="${E(c.fileUrl)}" target="_blank" rel="noopener">Open in Google Drive ↗</a></p>` : ''}</div>
@@ -202,6 +215,8 @@ function claimReviewModal(c) {
           ${UI.field('Merchant / supplier', UI.input('merchant', merchant))}
           ${UI.field('Supplier contact', UI.select('supplierId', [['', '+ Create from merchant name'], ...UI.contactOptions('supplier').slice(1)], supplier ? supplier.id : ''), 'cl-sup')}
           ${UI.field('Receipt / invoice no.', UI.input('ref', ed.ref ?? d.document_number ?? ''))}
+          ${UI.field('Receipt currency', UI.input('currency', recCur, 'id="cl-cur" maxlength="3" style="text-transform:uppercase"'))}
+          ${UI.field(`Exchange rate (1 ${recCur} = ? ${baseCur})`, UI.input('fx', recCur === baseCur ? '' : (ed.fx || (DB.data.currencies.find(x => x.code === recCur) || {}).rate || ''), 'id="cl-fx" type="number" step="any"'), 'cl-fx')}
           ${UI.field('Date', UI.input('date', ed.date || d.date || U.today(), 'type="date"'))}
           ${UI.field('Expense account', UI.select('accountId', UI.glOptions(['expense', 'cogs', 'asset'], '(default)'), ed.accountId ?? (s.accountId || C.sys('otherExpense'))))}
           ${UI.field('Paid from', UI.select('bank', UI.accountOptions('—'), s.bankId || DB.data.bankAccounts[0]?.id || ''), 'cl-out')}
@@ -238,7 +253,9 @@ function claimReviewModal(c) {
       };
       const tot = () => {
         const total = C.total({ lines: getLines(f).map(l => ({ ...l, discount: 0 })) });
-        $('#cl-tot', back).textContent = 'Total ' + U.money(total);
+        const cur = ($('#cl-cur', back).value || baseCur).trim().toUpperCase(), fx = U.num($('#cl-fx', back).value);
+        $$('.cl-fx', back).forEach(x => { x.style.display = cur === baseCur ? 'none' : ''; });
+        $('#cl-tot', back).textContent = cur === baseCur ? 'Total ' + U.money(total) : `Total ${cur} ${U.amt(total)}${fx > 0 ? ' = ' + U.money(U.r2(total * fx)) : ' — enter the exchange rate'}`;
         $('#cl-warn', back).textContent = d.total != null && Math.abs(U.num(d.total) - total) > 0.05 ? `⚠ Differs from the printed total by ${U.amt(U.r2(total - U.num(d.total)))} — check the lines and tax.` : '';
       };
       show(); tot();
