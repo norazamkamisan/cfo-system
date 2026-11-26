@@ -80,6 +80,7 @@ const MENU = [
     { label: 'Integrated Apps', href: '#/control/apps' }, { label: 'Sync (PC & phone)', href: '#/control/sync' }, { label: 'Backup & Data', href: '#/control/data' },
   ] },
   { label: 'A.I Scan', href: '#/ai-scan' },
+  { label: 'Claims', href: '#/claims' },
 ];
 
 function menuHtml(items, top) {
@@ -175,6 +176,8 @@ function initTopbar() {
 function notifications() {
   const n = [];
   const today = U.today();
+  const cl = DB.data.claims.filter(c => c.status === 'pending').length;
+  if (cl) n.push([`${cl} claim(s) waiting for your approval`, '#/claims', 'amber']);
   const od = C.openPayables('sales').filter(d => C.status(d) === 'overdue');
   if (od.length) n.push([`${od.length} overdue sales invoice(s) — ${U.money(U.sum(od, d => C.balance(d) * C.rate(d)))}`, '#/reports/ageing/ar-details', 'red']);
   const bills = C.openPayables('purchases').filter(d => C.balance(d) > 0.005 && d.dueDate && d.dueDate <= U.addDays(today, 7));

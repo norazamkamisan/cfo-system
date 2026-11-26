@@ -31,6 +31,19 @@ Each device still works offline; changes merge automatically after you save, whe
 2 minutes. If the same field is changed on both devices before they sync, the device that syncs last keeps
 its version and the clash is listed on the Sync page.
 
+## Claims (receipts → approval → books)
+Put receipts (photo or PDF) in **Google Drive › CFO System › Claims › _company name_**, or tap **📷 Add receipt** on the
+**Claims** page (handy on the phone). While the app is open it checks the folder about every 2 minutes, reads each
+receipt with A.I Scan and lists it under **Waiting for approval**. **Nothing is posted until you approve it.**
+On approval you choose how it's posted:
+- **Expense claim:** you paid. Creates a Bill owed to the claimant, which you settle later with Purchases → Payment.
+- **Paid by the company:** creates a Withdrawal from the chosen bank or cash account.
+- **Supplier bill:** not paid yet. Creates a Bill owed to the merchant.
+
+Receipts move in Drive from the inbox to **Scanned**, then to **Approved** or **Rejected**. Claims sync to every device
+like the rest of the books. Requires the *Google Drive · automatic* helper, version 2 (update it from the Sync page) and an
+Anthropic API key in Integrated Apps.
+
 ## Publishing updates
 After changing files: `git add -A`, `git commit -m "…"`, `git push`. GitHub Pages republishes in about a minute,
 and installed apps pick up the new version the next time they're opened online.

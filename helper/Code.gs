@@ -12,6 +12,8 @@
 var SYNC_KEY = '__SYNC_KEY__';
 var ROOT = 'CFO System';
 var BACKUPS = 'Backups';
+var CLAIMS = 'Claims';      // receipts inbox: CFO System › Claims › <company>
+var HELPER_VERSION = 2;
 
 function doPost(e) {
   var out;
@@ -33,7 +35,7 @@ function handle_(req) {
   switch (req.action) {
     case 'ping':
       folder_(null);
-      return { ok: true, folder: ROOT, account: Session.getEffectiveUser().getEmail() };
+      return { ok: true, folder: ROOT, version: HELPER_VERSION, account: Session.getEffectiveUser().getEmail() };
     case 'get': {
       var f = find_(req.path);
       if (!f) return { file: null };
@@ -72,6 +74,43 @@ function handle_(req) {
     case 'remove':
       DriveApp.getFileById(req.id).setTrashed(true);
       return { ok: true };
+
+    /* ---- Claims: receipts dropped in CFO System › Claims › <company> ---- */
+    case 'claims.inbox': {
+      var cf = claimFolder_(req), files = [], ci = cf.getFiles();
+      while (ci.hasNext()) {
+        var cfile = ci.next(), mt = cfile.getMimeType();
+        if (/^image\//.test(mt) || mt === 'application/pdf') files.push({ id: cfile.getId(), name: cfile.getName(), mime: mt, size: cfile.getSize(), modified: cfile.getLastUpdated().toISOString() });
+      }
+      files.sort(function (a, b) { return a.modified < b.modified ? -1 : 1; });
+      return { folderId: cf.getId(), folderUrl: cf.getUrl(), files: files };
+    }
+    case 'claims.take': {      // move a new receipt out of the inbox so only one device scans it
+      var tl = LockService.getScriptLock();
+      tl.waitLock(20000);
+      try {
+        var tf = DriveApp.getFileById(req.id), tcf = claimFolder_(req);
+        if (!hasParent_(tf, tcf.getId())) return { taken: false };
+        tf.moveTo(sub_(tcf, 'Scanned'));
+        return { taken: true, url: tf.getUrl() };
+      } finally { tl.releaseLock(); }
+    }
+    case 'claims.file': {
+      var rf = claimFile_(req.id);
+      if (rf.getSize() > 20 * 1024 * 1024) throw new Error('Receipt file is larger than 20 MB.');
+      return { name: rf.getName(), mime: rf.getMimeType(), url: rf.getUrl(), data: Utilities.base64Encode(rf.getBlob().getBytes()) };
+    }
+    case 'claims.move': {      // to: Scanned | Approved | Rejected
+      if (['Scanned', 'Approved', 'Rejected'].indexOf(req.to) < 0) throw new Error('Bad folder');
+      var mf = claimFile_(req.id);
+      mf.moveTo(sub_(claimFolder_(req), req.to));
+      return { ok: true };
+    }
+    case 'claims.upload': {    // receipt photo taken in the app → goes into the inbox
+      var uf = claimFolder_(req);
+      var blob = Utilities.newBlob(Utilities.base64Decode(req.data), req.mime, String(req.name || 'receipt').replace(/[\\\/]/g, '-'));
+      return { id: uf.createFile(blob).getId() };
+    }
     default:
       throw new Error('Unknown action: ' + req.action);
   }
@@ -83,6 +122,38 @@ function folder_(sub) {
   if (!sub) return root;
   var subs = root.getFoldersByName(sub);
   return subs.hasNext() ? subs.next() : root.createFolder(sub);
+}
+
+/** Claims folder for one company (remembered by id, so renaming the company is fine). */
+function claimFolder_(req) {
+  if (req.folderId) {
+    try { var byId = DriveApp.getFolderById(req.folderId); if (!byId.isTrashed()) return byId; } catch (e) { /* recreate below */ }
+  }
+  var name = String(req.company || 'Company').replace(/[\\\/:*?"<>|]/g, '-').trim() || 'Company';
+  return sub_(folder_(CLAIMS), name);
+}
+
+function sub_(parent, name) {
+  var it = parent.getFoldersByName(name);
+  return it.hasNext() ? it.next() : parent.createFolder(name);
+}
+
+function hasParent_(file, folderId) {
+  var p = file.getParents();
+  while (p.hasNext()) if (p.next().getId() === folderId) return true;
+  return false;
+}
+
+/** Only files inside CFO System › Claims can be read or moved. */
+function claimFile_(id) {
+  var f = DriveApp.getFileById(id), claimsId = folder_(CLAIMS).getId();
+  var level = f.getParents();
+  for (var depth = 0; depth < 3 && level.hasNext(); depth++) {
+    var p = level.next();
+    if (p.getId() === claimsId) return f;
+    level = p.getParents();
+  }
+  throw new Error('That file is not in the Claims folder.');
 }
 
 function where_(path) {

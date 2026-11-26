@@ -173,6 +173,7 @@ function defaultData() {
     reconciliations: [], reconciled: {}, taxFilings: [], budgets: [],
     openingBalances: { date: '', lines: [] },
     integrations: { aiKey: '', aiModel: 'claude-opus-5-5' },
+    claims: [], claimSettings: { autoScan: true, claimantId: '', postAs: 'claim', accountId: '', bankId: '', folderId: '', folderUrl: '' },
     audit: [], counters: {},
   };
 }
@@ -181,7 +182,7 @@ function defaultData() {
 function migrate(d) {
   const base = defaultData();
   for (const k of Object.keys(base)) if (d[k] === undefined) d[k] = base[k];
-  ['settings', 'formDesign', 'taxSettings', 'inventorySettings', 'integrations'].forEach(k => { d[k] = Object.assign({}, base[k], d[k]); });
+  ['settings', 'formDesign', 'taxSettings', 'inventorySettings', 'integrations', 'claimSettings'].forEach(k => { d[k] = Object.assign({}, base[k], d[k]); });
   if ((d.version || 1) < 2) {
     d.docs.forEach(x => { if (x.type === 'debitNote') x.type = 'purchaseCreditNote'; });
     if (d.counters.DN) { d.counters.PCN = d.counters.DN; delete d.counters.DN; }

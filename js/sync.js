@@ -413,6 +413,7 @@ const Sync = {
         Sync.setLink(link);
         Sync.lastPull = Date.now();
         Sync.setStatus('ok', '');
+        if (typeof Claims !== 'undefined') Claims.auto();
         await Sync.dailyBackup(link, packed || remote.text).catch(e => console.warn('Backup skipped:', e.message));
         if (cf.length) UI.toast(`Synced. ${cf.length} item(s) were changed on both devices — this device's version was kept. See Control Panel → Sync.`, 'err');
         if (dups.length) UI.toast(`Same number used on two devices: ${dups.join(', ')}. Please renumber one of them.`, 'err');
