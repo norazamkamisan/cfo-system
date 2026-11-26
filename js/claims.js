@@ -197,8 +197,9 @@ function claimPost(c, v, lines) {
     if (v.as === 'claim') {
       contactId = v.claimantId;
       if (!contactId) {
-        if (!v.claimantName) throw new Error('Choose or name the claimant (the person who paid)');
-        contactId = DB.upsert('contacts', { type: 'supplier', entity: 'individual', name: v.claimantName, terms: 0, notes: 'Expense claims' }, 'Contact').id;
+        if (!v.claimantName) throw new Error('Choose or type the claimant (the person who paid)');
+        const same = DB.data.contacts.find(x => x.name.trim().toLowerCase() === v.claimantName.trim().toLowerCase());
+        contactId = same ? same.id : DB.upsert('contacts', { type: 'supplier', entity: 'individual', name: v.claimantName, terms: 0, notes: 'Expense claims' }, 'Contact').id;
       }
       s.claimantId = contactId;
     } else {
@@ -258,8 +259,8 @@ function claimReviewModal(c) {
         ${locked ? `<div class="alert info">Approved by ${E(c.approvedBy || '')} on ${E(U.fdatetime(c.approvedAt))} → ${E(c.postedNumber || '')}</div>` : ''}
         <div class="form-grid">
           ${UI.field('Post as', UI.select('as', CLAIM_AS, defAs, 'id="cl-as"'), 'full')}
-          ${UI.field('Claimant (who paid)', UI.select('claimantId', [['', claimant ? 'Select…' : '+ New claimant'], ...UI.contactOptions(null).slice(1)], claimant ? claimant.id : ''), 'cl-claim')}
-          ${UI.field('Claimant name (if new)', UI.input('claimantName', claimant ? '' : Auth.userName()), 'cl-claim')}
+          ${UI.field('Claimant (who paid)', UI.select('claimantId', [['', '+ New claimant (type the name) …'], ...UI.contactOptions(null).slice(1)], claimant ? claimant.id : '', 'id="cl-who"'), 'cl-claim')}
+          ${UI.field('New claimant name', UI.input('claimantName', '', 'placeholder="Full name of the person who paid"'), 'cl-claim cl-newwho')}
           ${UI.field('Merchant / supplier', UI.input('merchant', merchant))}
           ${UI.field('Supplier contact', UI.select('supplierId', [['', '+ Create from merchant name'], ...UI.contactOptions('supplier').slice(1)], supplier ? supplier.id : ''), 'cl-sup')}
           ${UI.field('Receipt / invoice no.', UI.input('ref', ed.ref ?? d.document_number ?? ''))}
@@ -298,6 +299,8 @@ function claimReviewModal(c) {
         $$('.cl-claim', back).forEach(x => { x.style.display = as === 'claim' ? '' : 'none'; });
         $$('.cl-sup', back).forEach(x => { x.style.display = as === 'claim' ? 'none' : ''; });
         $$('.cl-out', back).forEach(x => { x.style.display = as === 'out' ? '' : 'none'; });
+        // the name box is only for a new claimant, so it can never be ignored
+        $$('.cl-newwho', back).forEach(x => { x.style.display = as === 'claim' && !$('#cl-who', back).value ? '' : 'none'; });
       };
       const tot = () => {
         const total = C.total({ lines: getLines(f).map(l => ({ ...l, discount: 0 })) });
@@ -308,6 +311,7 @@ function claimReviewModal(c) {
       };
       show(); tot();
       $('#cl-as', back).onchange = show;
+      $('#cl-who', back).addEventListener('change', show);
       f.addEventListener('input', tot); f.addEventListener('change', tot);
       $('#cl-lines', back).addEventListener('click', e => { if (e.target.closest('[data-rm]') && $$('#cl-lines tr', back).length > 1) { e.target.closest('tr').remove(); tot(); } });
       $('#cl-add', back).onclick = () => { $('#cl-lines', back).insertAdjacentHTML('beforeend', lineRow({ qty: 1 })); };

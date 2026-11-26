@@ -184,7 +184,8 @@ const OCR = {
     const norm = s => String(s || '').toLowerCase().replace(/\b(sdn|bhd|berhad|plt|enterprise)\b/g, '').replace(/[^a-z0-9]/g, '');
     const own = norm(opts.own);
     const isOwn = l => own.length >= 4 && norm(l).includes(own);
-    const clean = s => s && s.replace(/^[\s:\-]+|[\s.,:]+$/g, '').slice(0, 80);
+    // two columns on one line in PDFs: "Anthropic, PBC   Bill to" → drop the right-hand label
+    const clean = s => s && s.replace(/\s+(?:bill(?:ed)?\s+to|ship\s+to|sold\s+to|invoice\s+to|deliver\s+to|customer|kepada|date|tarikh)\b.*$/i, '').replace(/^[\s:\-]+|[\s.,:]+$/g, '').slice(0, 80);
     const head = /^(payment\s+)?(receipt|resit|official receipt|e-?receipt|fpx receipt|tax invoice|invoice|invois|cash bill|bill|welcome|selamat datang|thank|terima kasih|dear|copy|duplicate|customer copy|page\b|payment|transaction|date|invoice number|receipt number|bill to|reference)\b/i;
     const letters = l => (l.match(/[A-Za-z]/g) || []).length;
     const company = /\b(sdn\.?\s*bhd|bhd|berhad|plt|enterprise|trading|restoran|restaurant|cafe|kedai|mart|store|station|hardware|pharmacy|farmasi|hotel|services?|inc|llc|ltd|limited|pbc|corp(oration)?|majlis|lembaga|jabatan|kementerian|universiti|tenaga)\b/i;
